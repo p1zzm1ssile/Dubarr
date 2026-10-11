@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>dubarr</Name>
+  <Repository>ghcr.io/p1zzm1ssile/dubarr:latest</Repository>
+  <Registry>https://github.com/p1zzm1ssile/Dubarr/pkgs/container/dubarr</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/p1zzm1ssile/Dubarr/issues</Support>
+  <Project>https://github.com/p1zzm1ssile/Dubarr</Project>
+  <Overview>Removes audio and subtitle tracks in languages you don't want from your movies and TV, without re-encoding. Files with no audio in your language are left alone and flagged. Starts in report-only mode, keeps every original in a recycle folder with one-click restore, waits for torrents to finish seeding, and tells Radarr, Sonarr and Jellyfin about each change. Set everything up in the web UI.</Overview>
+  <Category>MediaApp:Video MediaServer:Video Tools:</Category>
+  <WebUI>http://[IP]:[PORT:9892]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/p1zzm1ssile/Dubarr/main/src/web/icon.png</Icon>
+  <ExtraParams/>
+  <Config Name="Web UI port" Target="9892" Default="9892" Mode="tcp" Description="Port for the Dubarr web UI" Type="Port" Display="always" Required="true" Mask="false">9892</Config>
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/dubarr" Mode="rw" Description="Settings, login, database and logs" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/dubarr</Config>
+  <Config Name="Movies" Target="/movies" Default="/mnt/user/data/media/movies" Mode="rw" Description="Your movie library. Needs read/write, as Dubarr rewrites files. Map the same folder Radarr uses." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/data/media/movies</Config>
+  <Config Name="TV" Target="/tv" Default="/mnt/user/data/media/tv" Mode="rw" Description="Your TV library. Needs read/write, as Dubarr rewrites files. Map the same folder Sonarr uses." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/data/media/tv</Config>
+</Container>

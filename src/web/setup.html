@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dubarr · Create account</title>
+  <link rel="icon" href="/static/icon.svg">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="auth-page">
+    <div class="auth-box">
+      <div class="brand"><img src="/static/icon.svg" alt="">Dubarr</div>
+      <form class="panel" id="login-form" data-mode="setup" novalidate>
+        <h1>Welcome! Create your login</h1>
+        <p class="muted small">This protects Dubarr, which can change your media files and holds your Radarr, Sonarr and Jellyfin API keys.</p>
+        <label class="field"><span class="label">Setup code</span>
+          <input type="text" name="code" autocomplete="off" required autofocus placeholder="XXXX-XXXX-XXXX" spellcheck="false">
+          <div class="help">Shown in Dubarr's log when it starts. In Unraid, click the Dubarr icon and choose <strong>Logs</strong>. With Docker, run <code>docker logs dubarr</code>.</div></label>
+        <label class="field"><span class="label">Username</span>
+          <input type="text" name="username" autocomplete="username" required maxlength="64"></label>
+        <label class="field"><span class="label">Password</span>
+          <input type="password" name="password" autocomplete="new-password" required></label>
+        <ul class="rules" id="rules"></ul>
+        <label class="field"><span class="label">Confirm password</span>
+          <input type="password" name="confirm" autocomplete="new-password" required></label>
+        <div class="error-text" id="form-error" role="alert"></div>
+        <p><button class="primary" type="submit">Create account</button></p>
+      </form>
+      <div class="notice warn small">
+        <strong>Keep Dubarr on your home network.</strong>
+        We don't recommend putting it behind a reverse proxy (Nginx Proxy Manager, SWAG, Traefik, Cloudflare Tunnel and the like)
+        for access from outside your network. Use a VPN such as WireGuard or Tailscale to reach it remotely instead.
+      </div>
+    </div>
+  </div>
+  <script src="/static/login.js"></script>
+</body>
+</html>

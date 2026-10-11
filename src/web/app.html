@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dubarr</title>
+  <link rel="icon" href="/static/icon.svg">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="#/"><img src="/static/icon.svg" alt="">Dubarr</a>
+    <nav class="main">
+      <a href="#/" data-page="dashboard">Dashboard</a>
+      <a href="#/history" data-page="history">History</a>
+      <a href="#/logs" data-page="logs">Logs</a>
+      <a href="#/settings/general" data-page="settings">Settings</a>
+      <a href="#/contact" data-page="contact">Contact</a>
+    </nav>
+    <span class="spacer"></span>
+    <span class="pill" id="health" title="Checking status"><span class="dot"></span><span class="hide-small" id="health-text">Checking…</span></span>
+    <span class="muted small hide-small" id="whoami"></span>
+    <button class="link" id="logout" type="button">Log out</button>
+  </header>
+  <main id="view"></main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

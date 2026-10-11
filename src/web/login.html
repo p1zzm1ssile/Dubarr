@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dubarr · Log in</title>
+  <link rel="icon" href="/static/icon.svg">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="auth-page">
+    <div class="auth-box">
+      <div class="brand"><img src="/static/icon.svg" alt="">Dubarr</div>
+      <form class="panel" id="login-form" data-mode="login" novalidate>
+        <h1>Log in</h1>
+        <label class="field"><span class="label">Username</span>
+          <input type="text" name="username" autocomplete="username" required autofocus></label>
+        <label class="field"><span class="label">Password</span>
+          <input type="password" name="password" autocomplete="current-password" required></label>
+        <div class="error-text" id="form-error" role="alert"></div>
+        <p><button class="primary" type="submit">Log in</button></p>
+      </form>
+      <div class="notice warn small">
+        <strong>Keep Dubarr on your home network.</strong>
+        It can change your media files and holds your Radarr, Sonarr and Jellyfin API keys, so we don't recommend
+        putting it behind a reverse proxy (Nginx Proxy Manager, SWAG, Traefik, Cloudflare Tunnel and the like)
+        for access from outside your network. Use a VPN such as WireGuard or Tailscale to reach it remotely instead.
+      </div>
+      <p class="muted small">Forgotten your password? Delete <code>auth.json</code> from Dubarr's config folder and restart it.</p>
+    </div>
+  </div>
+  <script src="/static/login.js"></script>
+</body>
+</html>
