@@ -67,6 +67,10 @@ class Store:
         with self._lock:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.executescript(SCHEMA)
+            # Added in 0.4: the video a removed subtitle file belonged to
+            columns = {r["name"] for r in self._db.execute("PRAGMA table_info(history)").fetchall()}
+            if "video" not in columns:
+                self._db.execute("ALTER TABLE history ADD COLUMN video TEXT")
 
     def _all(self, sql, args=()):
         with self._lock:
@@ -152,11 +156,11 @@ class Store:
 
     # History
 
-    def add_history(self, run_id, path, backup_path, original_size, message, removed):
+    def add_history(self, run_id, path, backup_path, original_size, message, removed, video=None):
         return self._run(
-            """INSERT INTO history (run_id, path, backup_path, original_size, message, removed, state, changed_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'swapping', ?)""",
-            (run_id, path, backup_path, original_size, message, json.dumps(removed), time.time()),
+            """INSERT INTO history (run_id, path, backup_path, original_size, message, removed, state, changed_at, video)
+               VALUES (?, ?, ?, ?, ?, ?, 'swapping', ?, ?)""",
+            (run_id, path, backup_path, original_size, message, json.dumps(removed), time.time(), video),
         ).lastrowid
 
     def update_history(self, history_id, **fields):

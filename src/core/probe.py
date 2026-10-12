@@ -1,10 +1,12 @@
 """Read the tracks inside a video file with ffprobe."""
 
 import json
+import os
 import subprocess
 from dataclasses import asdict, dataclass, field
 
 from utils.languages import normalise
+from utils.proc import wrap
 
 # Raise when probe() starts recording something new, so cached results are read again
 PROBE_VERSION = 3
@@ -42,6 +44,7 @@ class MediaInfo:
     size: int
     tracks: list = field(default_factory=list)
     version: int = PROBE_VERSION
+    external: list = field(default_factory=list)  # subtitle files beside the video, from find_sidecars()
 
     def of(self, kind):
         return [t for t in self.tracks if t.type == kind]
@@ -56,6 +59,43 @@ class MediaInfo:
 
 class ProbeError(Exception):
     pass
+
+
+# Subtitle files that sit beside a video, like Film.en.srt or Film.eng.forced.srt
+TEXT_SIDECARS = ("srt", "ass", "ssa", "vtt")
+PICTURE_SIDECARS = ("sup", "sub", "idx")
+SIDECAR_FLAGS = {"forced": "forced", "sdh": "hi", "hi": "hi", "cc": "hi", "default": None}
+
+
+def find_sidecars(video_path: str) -> list:
+    """Subtitle files named after a video. The language comes from the name: Film.en.srt, Film.English.srt.
+    The first part after the film's name is the language; later parts can say forced, sdh, hi or cc.
+    A file with no recognised language counts as unknown, and is never removed."""
+    folder, name = os.path.split(video_path)
+    stem = os.path.splitext(name)[0]
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    found = []
+    for other in sorted(names):
+        base, ext = os.path.splitext(other)
+        ext = ext[1:].lower()
+        if ext not in TEXT_SIDECARS + PICTURE_SIDECARS or other.startswith("."):
+            continue
+        if base != stem and not base.startswith(stem + "."):
+            continue
+        parts = [p for p in base[len(stem):].split(".") if p]
+        language = normalise(parts[0]) if parts else "und"
+        flags = {SIDECAR_FLAGS.get(p.lower()) for p in parts[1:]}
+        try:
+            size = os.path.getsize(os.path.join(folder, other))
+        except OSError:
+            size = 0
+        found.append({"path": os.path.join(folder, other), "language": language, "format": ext,
+                      "text": ext in TEXT_SIDECARS, "forced": "forced" in flags, "hearing_impaired": "hi" in flags,
+                      "size": size})
+    return found
 
 
 def _int(value):
@@ -118,7 +158,7 @@ def parse(path: str, data: dict) -> MediaInfo:
 def probe(path: str, timeout: int = 120) -> MediaInfo:
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", path],
+            wrap(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", path]),
             capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired:

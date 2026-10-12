@@ -11,6 +11,7 @@ import subprocess
 
 from core.plan import Plan
 from core.probe import MediaInfo, ProbeError, probe
+from utils.proc import ffmpeg_threads, wrap
 
 MKV = (".mkv", ".mk3d")
 MP4 = (".mp4", ".m4v")
@@ -36,7 +37,7 @@ def temp_path(path: str) -> str:
 
 def _run(command, timeout):
     try:
-        return subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(wrap(command), capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         raise RemuxError(f"{command[0]} took longer than {timeout // 60} minutes")
     except FileNotFoundError:
@@ -94,7 +95,7 @@ def ffmpeg_command(source: str, target: str, info: MediaInfo, plan: Plan) -> lis
     for position, index in enumerate(kept_subs):
         if index in plan.mark_forced:
             command += [f"-disposition:s:{position}", "+forced"]
-    command += ["-movflags", "+faststart", "-f", "mp4"]
+    command += ffmpeg_threads() + ["-movflags", "+faststart", "-f", "mp4"]
     return command + [target]
 
 

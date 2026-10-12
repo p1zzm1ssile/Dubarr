@@ -1,4 +1,4 @@
-"""Radarr, Sonarr and Jellyfin: tell them to look at a file again after Dubarr changes it."""
+"""Radarr, Sonarr, Bazarr and Jellyfin: tell them to look at a file again after Dubarr changes it."""
 
 import threading
 import time
@@ -81,6 +81,71 @@ class Arr:
         else:
             self._request("POST", "/command", json={"name": "RescanSeries", "seriesId": id})
         return title
+
+
+class Bazarr:
+    """Bazarr knows films by their Radarr id and series by their Sonarr id, so Dubarr finds those first:
+    through Radarr or Sonarr when they're connected, otherwise from Bazarr's own list."""
+
+    def __init__(self, cfg):
+        self.name = "Bazarr"
+        self.url = cfg.bazarr_url
+        self.api_key = cfg.bazarr_api_key
+        self.paths = cfg.bazarr_paths
+        self.timeout = cfg.request_timeout
+        self._lists = {}
+        self._lock = threading.Lock()
+
+    def _request(self, method, path, params=None):
+        try:
+            response = requests.request(method, self.url + "/api" + path, headers={"X-API-KEY": self.api_key},
+                                        params=params, data=params if method != "GET" else None,
+                                        timeout=self.timeout)
+            response.raise_for_status()
+            return response.json() if response.content else None
+        except (requests.RequestException, ValueError) as e:
+            raise _error(e, self.name)
+
+    @staticmethod
+    def _data(answer):
+        return answer.get("data", answer) if isinstance(answer, dict) else answer
+
+    def version(self):
+        return (self._data(self._request("GET", "/system/status")) or {}).get("bazarr_version", "")
+
+    def profiles(self):
+        """[(profile name, [language codes])] from Bazarr's language profiles."""
+        result = []
+        for profile in self._data(self._request("GET", "/system/languages/profiles")) or []:
+            codes = [item.get("language", "") for item in profile.get("items", [])]
+            result.append((profile.get("name", "?"), [c for c in codes if c]))
+        return result
+
+    def _list(self, kind):
+        with self._lock:
+            loaded, items = self._lists.get(kind, (0, None))
+            if items is None or time.time() - loaded > CACHE_SECONDS:
+                items = self._data(self._request("GET", f"/{kind}", {"start": 0, "length": -1})) or []
+                self._lists[kind] = (time.time(), items)
+            return items
+
+    def locate(self, local_path):
+        """("movie", Radarr id) or ("series", Sonarr id) for a file, from Bazarr's own lists, or None."""
+        remote = to_remote(local_path, self.paths)
+        for movie in self._list("movies"):
+            if movie.get("path") and (movie["path"] == remote or inside(remote, movie["path"])):
+                return "movie", movie.get("radarrId")
+        for show in self._list("series"):
+            if show.get("path") and inside(remote, show["path"]):
+                return "series", show.get("sonarrSeriesId")
+        return None
+
+    def action(self, kind, item_id, action):
+        """kind is "movie" or "series"; action is "scan-disk" or "search-missing"."""
+        if kind == "movie":
+            self._request("PATCH", "/movies", {"radarrid": item_id, "action": action})
+        else:
+            self._request("PATCH", "/series", {"seriesid": item_id, "action": action})
 
 
 class Jellyfin:

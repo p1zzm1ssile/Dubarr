@@ -88,6 +88,23 @@ def swap(store: Store, run_id: int, path: str, original_size: int, new_size: int
     return history_id
 
 
+def recycle_file(store: Store, run_id, path: str, video: str, message: str, root: str, keep_days: int) -> int:
+    """Move a subtitle file beside a video to the recycle folder (or delete it). Returns the history id."""
+    original_size = os.path.getsize(path)
+    history_id = store.add_history(run_id, path, None, original_size, message, [], video=video)
+    if keep_days <= 0:
+        os.remove(path)
+        store.update_history(history_id, state="deleted")
+        return history_id
+    # Recorded before the move, so an interrupted move can be undone by recover()
+    destination = os.path.join(root, str(history_id), os.path.basename(path))
+    store.update_history(history_id, backup_path=destination)
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    shutil.move(path, destination)
+    store.update_history(history_id, state=RESTORABLE)
+    return history_id
+
+
 def recover(store: Store) -> list:
     """Finish or undo swaps that were interrupted. Returns a message for each one."""
     messages = []

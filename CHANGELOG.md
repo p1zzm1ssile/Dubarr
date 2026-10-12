@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+
+- **Bazarr.** A new Bazarr tab in Settings. After changing a film, Dubarr asks Bazarr to look at it again straight away, and to search for subtitles if the change left none in your languages. Test connection checks Bazarr's language profiles, and the Dashboard warns if Bazarr downloads a language Dubarr removes, as those would keep coming back.
+- **Subtitle files beside films.** Files like Film.fr.srt, downloaded by Bazarr or Jellyfin, are removed when they're in a language you don't keep. It's just a file delete, so it happens even while the film itself waits for seeding to stop or is below the minimum saving. They go to the recycle folder and can be restored. Files whose name doesn't say a language are kept. On by default.
+- **Remove picture subtitles when a text file is beside the film.** If Film.en.srt sits beside the film, its English picture subtitles (PGS) aren't needed, and Jellyfin won't have to transcode to show them. Forced tracks stay. Off by default.
+- **Speed and CPU.** New settings in Settings > General: **Workers** (how many films are changed at once, never two on the same disk), **CPU threads per worker**, and **Run at low priority** (on by default), so Dubarr gives way to Jellyfin transcodes and everything else, for both CPU and disk.
+
 ## 0.3.1
 
 - **Skip files that would save less than…** A slider in Settings > General (off, or 10 MB up to 5 GB). Removing any track means rewriting the whole file, so a 4K film could be rewritten to save a few KB of subtitles. Files below the amount go to a "Not worth rewriting" list, where they can still be applied one at a time. Off by default.

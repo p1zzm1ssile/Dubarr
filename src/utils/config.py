@@ -74,6 +74,7 @@ TABS = {
     "libraries": "Libraries",
     "radarr": "Radarr",
     "sonarr": "Sonarr",
+    "bazarr": "Bazarr",
     "jellyfin": "Jellyfin",
 }
 
@@ -116,6 +117,15 @@ FIELDS = [
       env_bool("ONE_AUDIO_PER_LANGUAGE", default=True), section="Languages",
       help="e.g. keeps Dolby Atmos and removes the extra 5.1 and stereo copies. Jellyfin converts the audio on the fly "
            "for devices that can't play it, without touching the video. Audio description tracks are never picked."),
+    F("strip_subtitle_files", "general", "Remove subtitle files beside films in other languages", "bool",
+      env_bool("STRIP_SUBTITLE_FILES", default=True), section="Languages",
+      help="e.g. Film.fr.srt downloaded by Bazarr or Jellyfin. The language comes from the file name; files whose name "
+           "doesn't say one are kept. Just a file delete, so it's done even while the film itself waits."),
+    F("prefer_text_files", "general", "Remove picture subtitles when a text file is beside the film", "bool",
+      env_bool("PREFER_TEXT_FILES", default=False), section="Languages",
+      help="If Film.en.srt sits beside the film, its English picture subtitles (PGS) aren't needed, and Jellyfin "
+           "won't have to transcode to show them. Forced tracks stay. Off by default, as it trusts the downloaded "
+           "file to be a good match."),
     F("assume_unlabelled_is_full", "general", "Trust SDH labels when subtitle lengths aren't recorded", "bool",
       env_bool("ASSUME_UNLABELLED_IS_FULL", default=False), section="Languages",
       help="Some files don't record how long each subtitle track is, so a short forced track can't be told from a full one "
@@ -148,6 +158,16 @@ FIELDS = [
       options=[0, 10, 25, 50, 100, 250, 500, 1000, 2000, 5000],
       help="Removing any track means rewriting the whole file, which on a 4K film can be 60 GB of writing to save a few KB "
            "of subtitles. Files that would save less are listed under \"Not worth rewriting\" and can still be applied by hand."),
+    F("workers", "general", "Workers", "int",
+      env_int("WORKERS", default=1), section="Speed and CPU", min=1, max=8,
+      help="How many films are changed at once. Each one is mostly disk work, so more workers only help when the "
+           "films are on different disks; Dubarr never puts two on the same disk at once when it can tell."),
+    F("ffmpeg_threads", "general", "CPU threads per worker", "int",
+      env_int("FFMPEG_THREADS", default=0), section="Speed and CPU", min=0, max=64,
+      help="0 lets ffmpeg decide. Removing tracks is copying rather than encoding, so it rarely uses much CPU."),
+    F("low_priority", "general", "Run at low priority", "bool",
+      env_bool("LOW_PRIORITY", default=True), section="Speed and CPU",
+      help="Dubarr's ffmpeg and mkvmerge give way to everything else, like a Jellyfin transcode, for both CPU and disk."),
     F("process_hardlinked", "general", "Change files that are still seeding", "bool",
       env_bool("PROCESS_HARDLINKED", default=False), section="Changing files",
       help="A hardlinked file is usually still seeding in your torrent client. Changing it breaks the link, "
@@ -186,6 +206,7 @@ FIELDS = [
         for service, port, help_key in (
             ("radarr", 7878, "Settings > General > Security in Radarr"),
             ("sonarr", 8989, "Settings > General > Security in Sonarr"),
+            ("bazarr", 6767, "Settings > General > Security in Bazarr"),
             ("jellyfin", 8096, "Dashboard > API Keys in Jellyfin"),
         )
         for field in (
@@ -204,6 +225,10 @@ FIELDS = [
                    "Separate several with commas."),
         )
     ],
+    F("bazarr_search_missing", "bazarr", "Ask Bazarr for subtitles a film is left without", "bool",
+      env_bool("BAZARR_SEARCH_MISSING", default=True), section="What Bazarr does",
+      help="When a change leaves a film with no subtitles in your languages (say it only had French ones), Bazarr "
+           "is asked to search for them."),
 ]
 
 FIELDS_BY_KEY = {f["key"]: f for f in FIELDS}
@@ -213,6 +238,7 @@ SECRET_KEYS = {f["key"] for f in FIELDS if f["type"] == "secret"}
 # address, or anyone with access could send it to a server of their choosing.
 SECRET_URLS = {
     "radarr_api_key": "radarr_url", "sonarr_api_key": "sonarr_url", "jellyfin_api_key": "jellyfin_url",
+    "bazarr_api_key": "bazarr_url",
 }
 
 
@@ -363,7 +389,8 @@ def resolve(raw):
     for service in ("radarr", "sonarr"):
         resolved[f"{service}_url"] = ensure_http(raw[f"{service}_url"]).rstrip("/") + "/api/v3"
     resolved["jellyfin_url"] = ensure_http(raw["jellyfin_url"]).rstrip("/")
-    for service in ("radarr", "sonarr", "jellyfin"):
+    resolved["bazarr_url"] = ensure_http(raw["bazarr_url"]).rstrip("/")
+    for service in ("radarr", "sonarr", "bazarr", "jellyfin"):
         try:
             resolved[f"{service}_paths"] = parse_path_map(raw[f"{service}_path_map"])
         except ValueError:

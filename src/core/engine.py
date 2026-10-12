@@ -14,10 +14,11 @@ import utils.config as config
 from core import plan as plans
 from core import swap, tagging
 from core.plan import Rules, decide
-from core.probe import PROBE_VERSION, MediaInfo, ProbeError, probe
+from core.probe import PROBE_VERSION, MediaInfo, ProbeError, find_sidecars, probe
 from core.remux import RemuxError, remux, supported
 from core.store import Store
-from services.connections import Arr, Jellyfin, ServiceError
+from services.connections import Arr, Bazarr, Jellyfin, ServiceError
+from utils.languages import name, normalise
 from utils.logger import logger
 from utils.paths import inside
 
@@ -39,6 +40,74 @@ def estimated_saving(plan):
     if any(r["type"] == "audio" and not r["size"] for r in plan.remove):
         return None
     return plan.saved_bytes
+
+
+def disk_of(path):
+    """Which disk a file is on. Unraid's user shares say so directly; elsewhere the device id stands in.
+    Films on different disks can be rewritten side by side without slowing each other down."""
+    try:
+        return os.getxattr(path, "system.LOCATION").decode(errors="replace").strip("\x00") or None
+    except (OSError, AttributeError):
+        pass
+    try:
+        return f"device {os.stat(path).st_dev}"
+    except OSError:
+        return None
+
+
+def run_by_disk(rows, work, keep_going, workers):
+    """Call work(row) for every row, up to `workers` at a time, never two on the same disk at once.
+    Stops handing out new rows as soon as keep_going() says so."""
+    if workers <= 1:
+        for row in rows:
+            if not keep_going():
+                return
+            work(row)
+        return
+
+    pending = [(disk_of(r["path"]), r) for r in rows]
+    busy = set()
+    condition = threading.Condition()
+    stopped = False
+
+    def next_row():
+        nonlocal stopped
+        with condition:
+            while True:
+                if stopped or not pending:
+                    return None
+                for i, (disk, row) in enumerate(pending):
+                    if disk not in busy:
+                        if not keep_going():
+                            stopped = True
+                            return None
+                        pending.pop(i)
+                        busy.add(disk)
+                        return disk, row
+                condition.wait()
+
+    def worker():
+        while True:
+            picked = next_row()
+            if not picked:
+                with condition:
+                    condition.notify_all()
+                return
+            disk, row = picked
+            try:
+                work(row)
+            except Exception as e:
+                logger.exception(f"Changing {row['path']} failed: {e}")
+            finally:
+                with condition:
+                    busy.discard(disk)
+                    condition.notify_all()
+
+    threads = [threading.Thread(target=worker, daemon=True) for _ in range(min(workers, len(rows)))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
 
 def in_window(start: int, end: int, now: datetime.datetime = None) -> bool:
@@ -131,7 +200,7 @@ class Engine:
     def rules(self, library):
         return Rules(library["audio"], library["subtitles"], config.strip_audio, config.strip_subtitles,
                      config.strip_commentary, config.one_audio_per_language, config.one_subtitle_per_language,
-                     config.assume_unlabelled_is_full)
+                     config.assume_unlabelled_is_full, config.strip_subtitle_files, config.prefer_text_files)
 
     def _walk(self, library):
         recycle = config.recycle_folder
@@ -155,14 +224,10 @@ class Engine:
 
     # Scanning
 
-    def check_file(self, library, path, reread=False):
-        """Read a file's tracks (or reuse what's known) and decide what to do. Returns its status."""
-        try:
-            st = os.stat(path)
-        except OSError as e:
-            logger.warning(f"Can't read {path}: {e.strerror or e}")
-            return None
-
+    def evaluate(self, library, path, reread=False, allow_small=False):
+        """Read a file's tracks (or reuse what's known) and decide what to do.
+        Returns (status, message, plan, info, stat), with plan and info None if the file couldn't be read."""
+        st = os.stat(path)
         cached = self.store.file(path)
         info = None
         if cached and cached["info"] and not reread and cached["size"] == st.st_size and cached["mtime"] == st.st_mtime:
@@ -173,20 +238,40 @@ class Engine:
             try:
                 info = probe(path)
             except ProbeError as e:
-                self.store.save_file(path, library["path"], st.st_size, st.st_mtime, st.st_nlink, None, ERROR,
-                                     f"Couldn't read the file: {e}")
-                return ERROR
+                return ERROR, f"Couldn't read the file: {e}", None, None, st
+        # Subtitle files come and go without the video changing, so they're always looked at afresh
+        info.external = find_sidecars(path)
 
-        plan = decide(info, self.rules(library))
+        rules = self.rules(library)
+        plan = decide(info, rules)
         status, message = plan.status, plan.message
-        saving = estimated_saving(plan)
-        minimum = config.min_saving_mb * 1024 * 1024
-        if plan.changes and minimum and saving is not None and saving < minimum:
-            status, message = TOO_SMALL, f"{plan.message}. Saves less than the {size(minimum)} set, so it's left for now"
-        elif plan.changes and st.st_nlink > 1 and not config.process_hardlinked:
-            status, message = SEEDING, f"{plan.message}. Waiting: the file is hardlinked, probably still seeding"
-        self.store.save_file(path, library["path"], st.st_size, st.st_mtime, st.st_nlink, info.to_dict(),
-                             status, message, plan.to_dict(), plan.saved_bytes)
+        if plan.rewrites:
+            saving = estimated_saving(plan)
+            minimum = config.min_saving_mb * 1024 * 1024
+            waiting = None
+            if minimum and saving is not None and saving < minimum and not allow_small:
+                status, waiting = TOO_SMALL, f"Saves less than the {size(minimum)} set, so it's left for now"
+            elif st.st_nlink > 1 and not config.process_hardlinked:
+                status, waiting = SEEDING, "Waiting: the file is hardlinked, probably still seeding"
+            if waiting:
+                message = f"{plan.message}. {waiting}"
+                # The video has to wait, but subtitle files beside it can go now: deleting one costs nothing
+                files_only = decide(info, rules, tracks=False)
+                if files_only.remove_files:
+                    status, plan = plans.CHANGE, files_only
+                    message = f"{files_only.message}. The rest waits: {waiting[0].lower()}{waiting[1:]}"
+        return status, message, plan, info, st
+
+    def check_file(self, library, path, reread=False):
+        """Decide what to do with a file and record it. Returns its status."""
+        try:
+            status, message, plan, info, st = self.evaluate(library, path, reread)
+        except OSError as e:
+            logger.warning(f"Can't read {path}: {e.strerror or e}")
+            return None
+        self.store.save_file(path, library["path"], st.st_size, st.st_mtime, st.st_nlink,
+                             info.to_dict() if info else None, status, message,
+                             plan.to_dict() if plan else None, plan.saved_bytes if plan else 0)
         return status
 
     def scan(self, trigger="manual", paths=None, wait=False):
@@ -265,25 +350,40 @@ class Engine:
             # Rewriting takes time in proportion to size, so estimate from bytes
             self.activity["bytes_total"] = sum(r["size"] for r in rows)
             run_id = self.store.start_run(trigger)
-            changed = failed = saved = 0
-            for row in rows:
+            totals = {"changed": 0, "failed": 0, "saved": 0}
+            lock = threading.Lock()
+            working = []
+
+            def work(row):
+                with lock:
+                    working.append(os.path.basename(row["path"]))
+                    self.activity["detail"] = ", ".join(working)
+                try:
+                    result = self.change_file(run_id, row["path"], allow_small=bool(paths and force))
+                finally:
+                    with lock:
+                        working.remove(os.path.basename(row["path"]))
+                        self.activity["detail"] = ", ".join(working)
+                        self.activity["done"] += 1
+                        self.activity["bytes_done"] += row["size"]
+                with lock:
+                    if result is False:
+                        totals["failed"] += 1
+                    elif result is not None:
+                        totals["changed"] += 1
+                        totals["saved"] += result
+
+            def keep_going():
                 if self._stop.is_set():
                     logger.info("Stopped before finishing the batch")
-                    break
+                    return False
                 if not force and not in_window(config.active_from, config.active_until):
                     logger.info("Outside the hours set for changing files. The rest will wait")
-                    break
-                self.activity["detail"] = row["path"]
-                result = self.change_file(run_id, row["path"], allow_small=bool(paths and force))
-                self.activity["done"] += 1
-                self.activity["bytes_done"] += row["size"]
-                if result is None:
-                    continue
-                if result is False:
-                    failed += 1
-                else:
-                    changed += 1
-                    saved += result
+                    return False
+                return True
+
+            run_by_disk(rows, work, keep_going, max(1, config.workers))
+            changed, failed, saved = totals["changed"], totals["failed"], totals["saved"]
             self.store.finish_run(run_id, changed, failed, saved)
             if changed or failed:
                 logger.log("ACTION", f"Changed {changed} file(s), saving {size(saved)}"
@@ -296,30 +396,39 @@ class Engine:
         if not library:
             return None
         # Read the file again right before changing it, in case it changed since the scan
-        status = self.check_file(library, path, reread=True)
-        row = self.store.file(path)
-        if not (status == plans.CHANGE or (status == SEEDING and config.process_hardlinked)
-                or (status == TOO_SMALL and allow_small)):
+        try:
+            status, _, plan, info, st = self.evaluate(library, path, reread=True, allow_small=allow_small)
+        except OSError:
+            return None
+        if status != plans.CHANGE and not (status == SEEDING and config.process_hardlinked):
+            self.check_file(library, path)
             return None
 
-        info = MediaInfo.from_dict(row["info"])
-        plan = decide(info, self.rules(library))
+        root = swap.recycle_root(library["path"], config.recycle_folder)
+        saved = 0
         try:
-            new = remux(info, plan)
-            history_id = swap.swap(self.store, run_id, path, info.size, new.size, plan.message, plan.remove,
-                                   swap.recycle_root(library["path"], config.recycle_folder), config.recycle_days)
+            if plan.rewrites:
+                new = remux(info, plan)
+                history_id = swap.swap(self.store, run_id, path, info.size, new.size, plan.message, plan.remove,
+                                       root, config.recycle_days)
+                saved += info.size - new.size
+                logger.log("ACTION", f"{plan.message} from {path} (saved {size(info.size - new.size)}, change #{history_id})")
+            for f in plan.remove_files:
+                message = f"Removed the {name(f['language'])} subtitle file beside the film"
+                history_id = swap.recycle_file(self.store, run_id, f["path"], path, message, root, config.recycle_days)
+                saved += f["size"]
+                logger.log("ACTION", f"Removed {f['path']} ({name(f['language'])} subtitles, change #{history_id})")
         except (RemuxError, swap.SwapError, OSError) as e:
             reason = getattr(e, "strerror", None) or str(e)
             logger.error(f"Couldn't change {path}: {reason}. The original is untouched")
             st = os.stat(path)
-            self.store.save_file(path, library["path"], st.st_size, st.st_mtime, st.st_nlink, row["info"], ERROR,
-                                 f"Couldn't change it: {reason}", row["plan"], row["saved_bytes"])
+            self.store.save_file(path, library["path"], st.st_size, st.st_mtime, st.st_nlink,
+                                 info.to_dict(), ERROR, f"Couldn't change it: {reason}", plan.to_dict(), plan.saved_bytes)
             return False
 
-        logger.log("ACTION", f"{plan.message} from {path} (saved {size(info.size - new.size)}, change #{history_id})")
         self.check_file(library, path, reread=True)
         self.notify(path)
-        return info.size - new.size
+        return saved
 
     # Restoring
 
@@ -341,8 +450,10 @@ class Engine:
                 self.activity["done"] += 1
 
     def _restore_one(self, history_id):
-        path = swap.restore(self.store, history_id)
-        # Leave it alone from now on, or the next pass would strip it again
+        entry = self.store.history_entry(history_id)
+        restored = swap.restore(self.store, history_id)
+        # Leave the video alone from now on, or the next pass would strip it (or its subtitle file) again
+        path = entry.get("video") or restored
         self.store.set_ignored(path, True)
         library = self.library_for(path)
         if library:
@@ -421,27 +532,80 @@ class Engine:
         key = (kind, getattr(config, f"{kind}_url"), getattr(config, f"{kind}_api_key"),
                tuple(getattr(config, f"{kind}_paths")), config.request_timeout)
         if self._services.get(kind, (None,))[0] != key:
-            self._services[kind] = (key, Jellyfin(config) if kind == "jellyfin" else Arr(kind, config))
+            made = {"jellyfin": Jellyfin, "bazarr": Bazarr}.get(kind)
+            self._services[kind] = (key, made(config) if made else Arr(kind, config))
         return self._services[kind][1]
 
     def notify(self, path):
-        """Ask Radarr or Sonarr, and Jellyfin, to read the changed file again."""
+        """Ask Radarr or Sonarr, Bazarr and Jellyfin to read the changed file again."""
+        found = {}
         for kind in ("radarr", "sonarr"):
             arr = self._service(kind)
             if not arr:
                 continue
             try:
-                title = arr.rescan(path)
-                if title:
-                    logger.info(f"Asked {arr.name} to rescan {title}")
+                hit = arr.find(path)
+                if hit:
+                    found[kind] = hit[0]
+                    arr.rescan(path)
+                    logger.info(f"Asked {arr.name} to rescan {hit[1]}")
             except ServiceError as e:
                 logger.warning(f"Couldn't ask {arr.name} to rescan: {e}")
+        self._tell_bazarr(path, found)
         jellyfin = self._service("jellyfin")
         if jellyfin:
             try:
                 jellyfin.updated(path)
             except ServiceError as e:
                 logger.warning(f"Couldn't tell Jellyfin about the change: {e}")
+
+    def _tell_bazarr(self, path, found):
+        """Ask Bazarr to look at the film again and, if it's been left without subtitles in your languages,
+        to search for some."""
+        bazarr = self._service("bazarr")
+        if not bazarr:
+            return
+        try:
+            if "radarr" in found:
+                kind, item_id = "movie", found["radarr"]
+            elif "sonarr" in found:
+                kind, item_id = "series", found["sonarr"]
+            else:
+                located = bazarr.locate(path)
+                if not located:
+                    logger.info(f"Bazarr doesn't know {path}, so it wasn't told about the change")
+                    return
+                kind, item_id = located
+            bazarr.action(kind, item_id, "scan-disk")
+            if config.bazarr_search_missing and not self.has_wanted_subtitles(path):
+                bazarr.action(kind, item_id, "search-missing")
+                logger.info(f"Asked Bazarr to look for subtitles for {os.path.basename(path)}")
+        except ServiceError as e:
+            logger.warning(f"Couldn't tell Bazarr about the change: {e}")
+
+    def has_wanted_subtitles(self, path):
+        """Whether a film has subtitles in a language you keep, inside it or beside it."""
+        library = self.library_for(path)
+        row = self.store.file(path)
+        if not library or not row or not row["info"]:
+            return True
+        wanted = set(library["subtitles"])
+        inside = any(t["type"] == "subtitle" and t["language"] in wanted for t in row["info"]["tracks"])
+        beside = any(f["language"] in wanted for f in row["info"].get("external", []))
+        return inside or beside
+
+    def bazarr_clashes(self):
+        """Languages Bazarr downloads but Dubarr removes: [(profile name, [language names])]."""
+        bazarr = self._service("bazarr")
+        if not bazarr:
+            return []
+        kept = {code for lib in config.library_list for code in lib["subtitles"]}
+        clashes = []
+        for profile, codes in bazarr.profiles():
+            extra = sorted({normalise(c) for c in codes} - kept - {"und"})
+            if extra:
+                clashes.append((profile, [name(c) for c in extra]))
+        return clashes
 
     # Main loop
 

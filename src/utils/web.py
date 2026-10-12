@@ -20,8 +20,8 @@ from core import plan as plans
 from core.engine import ERROR, SEEDING, TOO_SMALL, Busy, in_window
 from core.swap import SwapError
 from core.tagging import TagError, audio_sample, subtitle_lines
-from services.connections import Arr, Jellyfin, ServiceError, webhook_paths
-from utils.languages import LANGUAGES
+from services.connections import Arr, Bazarr, Jellyfin, ServiceError, webhook_paths
+from utils.languages import LANGUAGES, name, normalise
 from utils.logger import logger
 from utils.paths import to_local
 
@@ -58,6 +58,7 @@ STATUSES = {
 }
 
 engine = None  # set by serve()
+_clash_cache = (0.0, [])  # Bazarr's language profiles change rarely, so they're checked every 10 minutes
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -279,10 +280,13 @@ class Handler(BaseHTTPRequestHandler):
                 if errors:
                     return self.send(400, {"errors": errors})
                 logger.info(f"Settings saved ({', '.join(sorted(changes.keys()))})")
+                # Languages or the Bazarr connection may have changed: check the profiles again
+                global _clash_cache
+                _clash_cache = (0.0, [])
                 # New languages or libraries change what's wanted: re-check (quick, nothing is re-read)
                 if {"audio_languages", "subtitle_languages", "strip_audio", "strip_subtitles", "strip_commentary",
                         "one_audio_per_language", "one_subtitle_per_language", "assume_unlabelled_is_full",
-                        "min_saving_mb",
+                        "min_saving_mb", "strip_subtitle_files", "prefer_text_files",
                         "libraries", "process_hardlinked"} & changes.keys():
                     engine.background(engine.scan, "settings", wait=True)
                 return self.send(200, {"ok": True, "values": config.public_values()})
@@ -368,7 +372,19 @@ def dashboard():
                        "audio": lib["audio"], "subtitles": lib["subtitles"]} for lib in config.library_list],
         "restorable_run": engine.store.last_run_with_restorable(),
         "report_only": config.report_only,
+        "bazarr_clashes": bazarr_clashes(),
     }
+
+
+def bazarr_clashes():
+    global _clash_cache
+    if time.time() - _clash_cache[0] > 600:
+        try:
+            clashes = engine.bazarr_clashes()
+        except ServiceError:
+            clashes = _clash_cache[1]
+        _clash_cache = (time.time(), clashes)
+    return [{"profile": p, "languages": langs} for p, langs in _clash_cache[1]]
 
 
 def files(query):
@@ -391,6 +407,8 @@ def files(query):
             "tracks": [t for t in info.get("tracks", []) if t["type"] in ("audio", "subtitle")],
             "remove": [t["index"] for t in (r["plan"] or {}).get("remove", [])],
             "mark_forced": (r["plan"] or {}).get("mark_forced", []),
+            "files": info.get("external", []),
+            "remove_files": [f["path"] for f in (r["plan"] or {}).get("remove_files", [])],
         })
     return {"total": total, "files": out}
 
@@ -452,10 +470,25 @@ def test_connection(target, values):
     """Try a connection with the settings on screen, saved or not."""
     try:
         cfg = config.preview(values)
-        if target not in ("radarr", "sonarr", "jellyfin"):
+        if target not in ("radarr", "sonarr", "bazarr", "jellyfin"):
             return {"ok": False, "message": "Unknown service"}
         if not getattr(cfg, f"{target}_api_key"):
             return {"ok": False, "message": "Enter the API key first"}
+        if target == "bazarr":
+            bazarr = Bazarr(cfg)
+            version = bazarr.version()
+            kept = {code for lib in cfg.library_list for code in lib["subtitles"]}
+            clashes = []
+            for profile, codes in bazarr.profiles():
+                extra = sorted({normalise(c) for c in codes} - kept - {"und"})
+                if extra:
+                    clashes.append(f"{profile} ({', '.join(name(c) for c in extra)})")
+            message = f"Connected to Bazarr {version}"
+            if clashes:
+                return {"ok": False, "message": f"{message}, but these language profiles download subtitles Dubarr "
+                                                f"removes: {'; '.join(clashes)}. Remove those languages in Bazarr, "
+                                                "or add them to Dubarr's subtitle languages"}
+            return {"ok": True, "message": f"{message}. Its language profiles match Dubarr's"}
         if target == "jellyfin":
             return {"ok": True, "message": f"Connected to Jellyfin {Jellyfin(cfg).version()}"}
         arr = Arr(target, cfg)
