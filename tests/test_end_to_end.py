@@ -323,3 +323,13 @@ def test_several_workers(library, engine, monkeypatch):
     for film in films:
         assert tracks(film, "audio") == ["eng"]
     assert engine.store.runs()[0]["changed"] == 5
+
+
+def test_recheck_of_a_deleted_file_removes_it(library, engine):
+    broken = library / "gone.mp4"
+    broken.write_bytes(b"\0\0\0 ftypmp42 cut short")
+    engine.scan()
+    assert engine.store.file(str(broken))["status"] == ERROR
+    broken.unlink()
+    engine.scan("manual", [str(broken)])  # what Re-check does
+    assert engine.store.file(str(broken)) is None

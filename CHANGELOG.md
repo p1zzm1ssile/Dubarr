@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1
+
+- **Re-check removes deleted files.** Pressing Re-check on a file that has since been deleted or renamed now takes it off the Dashboard, rather than leaving it there until the next full scan.
+
 ## 0.4.0
 
 - **Bazarr.** A new Bazarr tab in Settings. After changing a film, Dubarr asks Bazarr to look at it again straight away, and to search for subtitles if the change left none in your languages. Test connection checks Bazarr's language profiles, and the Dashboard warns if Bazarr downloads a language Dubarr removes, as those would keep coming back.

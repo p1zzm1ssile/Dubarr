@@ -104,6 +104,10 @@ class Store:
     def set_ignored(self, path, ignored: bool):
         self._run("UPDATE files SET ignored = ? WHERE path = ?", (1 if ignored else 0, path))
 
+    def forget(self, path):
+        """Drop one file. Returns whether it was known."""
+        return self._run("DELETE FROM files WHERE path = ?", (path,)).rowcount > 0
+
     def forget_missing(self, library, present: set):
         """Drop files under a library that weren't found in the latest scan."""
         known = [r["path"] for r in self._all("SELECT path FROM files WHERE library = ?", (library,))]
