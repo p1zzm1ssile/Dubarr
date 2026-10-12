@@ -7,6 +7,7 @@
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
   <Support>https://github.com/p1zzm1ssile/Dubarr/issues</Support>
+  <TemplateURL>https://raw.githubusercontent.com/p1zzm1ssile/Dubarr/main/unraid/dubarr.xml</TemplateURL>
   <Project>https://github.com/p1zzm1ssile/Dubarr</Project>
   <Overview>Removes audio and subtitle tracks in languages you don't want from your movies and TV, without re-encoding. Files with no audio in your language are left alone and flagged. Starts in report-only mode, keeps every original in a recycle folder with one-click restore, waits for torrents to finish seeding, and tells Radarr, Sonarr and Jellyfin about each change. Set everything up in the web UI.</Overview>
   <Category>MediaApp:Video MediaServer:Video Tools:</Category>

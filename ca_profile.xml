@@ -5,6 +5,8 @@
 
 Dubarr removes audio and subtitle tracks in languages you don't want, keeps the best track in the ones you do, and flags files with no audio in your language. It starts in report-only mode, keeps every original in a recycle folder with one-click restore, and waits for torrents to finish seeding.
 
-Everything is set up in a web UI. Bug reports and ideas are welcome on GitHub.</Profile>
+Evictarr keeps your download clients clean for Sonarr and Radarr. It removes imported, stalled and failed downloads, blocks releases containing malware or files you don't want and searches for replacements, and can skip samples and subtitles or audio that aren't in your languages. It works with qBittorrent, RDTClient, Deluge, Transmission and SABnzbd. Evictarr is a maintained fork of Purgarr by Steve Harsant.
+
+Both are set up in a web UI. Bug reports and ideas are welcome on GitHub: [Dubarr](https://github.com/p1zzm1ssile/Dubarr/issues) and [Evictarr](https://github.com/p1zzm1ssile/Evictarr/issues).</Profile>
   <WebPage>https://github.com/p1zzm1ssile/Dubarr</WebPage>
 </Maintainer>

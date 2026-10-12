@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>evictarr</Name>
+  <Repository>ghcr.io/p1zzm1ssile/evictarr:latest</Repository>
+  <Registry>https://github.com/p1zzm1ssile/Evictarr/pkgs/container/evictarr</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/p1zzm1ssile/Evictarr/issues</Support>
+  <TemplateURL>https://raw.githubusercontent.com/p1zzm1ssile/Dubarr/main/unraid/evictarr.xml</TemplateURL>
+  <Project>https://github.com/p1zzm1ssile/Evictarr</Project>
+  <Overview>Keeps your download clients clean for Sonarr and Radarr. Removes imported, stalled and failed downloads, blocks releases containing malware or unwanted files and searches for replacements. Works with qBittorrent, RDTClient, Deluge, Transmission and SABnzbd. Set everything up in the web UI. A maintained fork of Purgarr by Steve Harsant.</Overview>
+  <Category>Downloaders: MediaApp:Other Tools:</Category>
+  <WebUI>http://[IP]:[PORT:9891]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/p1zzm1ssile/Evictarr/main/src/web/icon.png</Icon>
+  <ExtraParams/>
+  <Config Name="Web UI port" Target="9891" Default="9891" Mode="tcp" Description="Port for the Evictarr web UI" Type="Port" Display="always" Required="true" Mask="false">9891</Config>
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/evictarr" Mode="rw" Description="Settings, login and logs" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/evictarr</Config>
+</Container>
