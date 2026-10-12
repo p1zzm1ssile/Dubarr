@@ -133,3 +133,32 @@ def test_old_cached_results_are_read_again():
     info = MediaInfo.from_dict({"path": "/x.mkv", "container": "matroska", "duration": 1, "size": 1, "tracks": []})
     assert info.version == 0
     assert MediaInfo(path="/x", container="", duration=0, size=0).version > 0
+
+
+def test_commentary_is_removed():
+    p = decide(media(VIDEO, audio("eng", default=True), audio("eng", commentary=True), audio("fra"), sub("eng")), ENGLISH)
+    assert [r["index"] for r in p.remove] == [3, 2]
+    assert p.message == "Remove French audio and 1 commentary track"
+
+
+def test_commentary_can_be_kept():
+    rules = Rules(["eng"], ["eng"], strip_commentary=False)
+    p = decide(media(VIDEO, audio("eng"), audio("eng", commentary=True)), rules)
+    assert p.status == plans.CLEAN
+
+
+def test_the_only_wanted_audio_is_never_removed_even_if_marked_commentary():
+    p = decide(media(VIDEO, audio("eng", commentary=True), audio("fra")), ENGLISH)
+    assert [r["index"] for r in p.remove] == [2]
+
+
+def test_three_parts_read_as_a_list():
+    p = decide(media(VIDEO, audio("eng"), audio("eng", commentary=True), audio("fra"), sub("spa")), ENGLISH)
+    assert p.message == "Remove French audio, 1 commentary track and Spanish subtitles"
+
+
+def test_untagged_subtitles_are_flagged_when_nothing_else_to_do():
+    p = decide(media(VIDEO, audio("eng"), sub("und"), sub("und")), ENGLISH)
+    assert p.status == plans.UNKNOWN_SUBTITLES
+    assert p.message.startswith("2 subtitle tracks have no language tag")
+    assert not p.remove

@@ -12,7 +12,7 @@ from contextlib import contextmanager
 
 import utils.config as config
 from core import plan as plans
-from core import swap
+from core import swap, tagging
 from core.plan import Rules, decide
 from core.probe import PROBE_VERSION, MediaInfo, ProbeError, probe
 from core.remux import RemuxError, remux, supported
@@ -67,7 +67,9 @@ class Engine:
         if not self._job.acquire(blocking=wait):
             raise Busy(f"Dubarr is busy: {self.activity['task'] if self.activity else 'working'}")
         self._stop.clear()
-        self.activity = {"task": task, "detail": "", "done": 0, "total": 0, "started": time.time()}
+        # done/total count files; bytes_done/bytes_total, when set, give a better time estimate for changes
+        self.activity = {"task": task, "detail": "", "done": 0, "total": 0, "bytes_done": 0, "bytes_total": 0,
+                         "started": time.time()}
         try:
             yield
         finally:
@@ -76,6 +78,22 @@ class Engine:
 
     def busy(self):
         return self._job.locked()
+
+    def progress(self):
+        """What's happening now, with an estimate of the time left. None when idle."""
+        a = self.activity
+        if not a:
+            return None
+        a = dict(a)
+        elapsed = time.time() - a["started"]
+        eta = None
+        if a["bytes_total"] and a["bytes_done"]:
+            eta = elapsed / a["bytes_done"] * (a["bytes_total"] - a["bytes_done"])
+        elif a["total"] and a["done"]:
+            eta = elapsed / a["done"] * (a["total"] - a["done"])
+        a["elapsed_seconds"] = round(elapsed)
+        a["eta_seconds"] = round(eta) if eta is not None else None
+        return a
 
     def stop(self):
         self._stop.set()
@@ -102,7 +120,8 @@ class Engine:
         return max(matches, key=lambda lib: len(lib["path"])) if matches else None
 
     def rules(self, library):
-        return Rules(library["audio"], library["subtitles"], config.strip_audio, config.strip_subtitles)
+        return Rules(library["audio"], library["subtitles"], config.strip_audio, config.strip_subtitles,
+                     config.strip_commentary)
 
     def _walk(self, library):
         recycle = config.recycle_folder
@@ -164,22 +183,24 @@ class Engine:
             if paths is None:
                 libraries = config.library_list
                 self.store.forget_libraries([lib["path"] for lib in libraries])
+                found = []
+                self.activity["detail"] = "Listing files"
                 for library in libraries:
                     if not os.path.isdir(library["path"]):
                         logger.warning(f"Library folder {library['path']} doesn't exist. Is it mapped in the container?")
                         continue
-                    self.activity["detail"] = library["path"]
-                    present = set()
-                    for path in self._walk(library):
+                    found.append((library, list(self._walk(library))))
+                self.activity["total"] = sum(len(paths) for _, paths in found)
+                for library, library_paths in found:
+                    for path in library_paths:
                         if self._stop.is_set():
                             break
-                        present.add(path)
-                        self.activity["done"] += 1
                         self.activity["detail"] = path
                         status = self.check_file(library, path)
                         counts[status] = counts.get(status, 0) + 1
+                        self.activity["done"] += 1
                     if not self._stop.is_set():
-                        self.store.forget_missing(library["path"], present)
+                        self.store.forget_missing(library["path"], set(library_paths))
                 self.last_scan = time.time()
             else:
                 self.activity["total"] = len(paths)
@@ -225,6 +246,8 @@ class Engine:
                 return
 
             self.activity["total"] = len(rows)
+            # Rewriting takes time in proportion to size, so estimate from bytes
+            self.activity["bytes_total"] = sum(r["size"] for r in rows)
             run_id = self.store.start_run(trigger)
             changed = failed = saved = 0
             for row in rows:
@@ -237,6 +260,7 @@ class Engine:
                 self.activity["detail"] = row["path"]
                 result = self.change_file(run_id, row["path"])
                 self.activity["done"] += 1
+                self.activity["bytes_done"] += row["size"]
                 if result is None:
                     continue
                 if result is False:
@@ -308,6 +332,59 @@ class Engine:
             self.check_file(library, path, reread=True)
         logger.log("ACTION", f"Restored the original of {path}. Dubarr will leave this file alone until you say otherwise")
         self.notify(path)
+
+    # Tagging
+
+    def known_file(self, path):
+        """A file Dubarr has scanned, as MediaInfo. Only these can be sampled or tagged."""
+        row = self.store.file(path)
+        if not row or not row["info"]:
+            raise tagging.TagError("Dubarr doesn't know this file. Scan first")
+        return MediaInfo.from_dict(row["info"])
+
+    def tag(self, path, changes, wait=False):
+        """Set the language of tracks, e.g. {2: "eng", 4: "fra"}. Returns what was done."""
+        with self.job("Tagging", wait=wait):
+            self.activity["detail"] = path
+            library = self.library_for(path)
+            if not library:
+                raise tagging.TagError("This file isn't in a library set up in Dubarr")
+            self.check_file(library, path, reread=True)
+            info = self.known_file(path)
+            current = {t.index: t.language for t in info.tracks}
+            wanted = {}
+            for index, code in changes.items():
+                index = int(index)
+                track = next((t for t in info.tracks if t.index == index), None)
+                if not track or track.type not in ("audio", "subtitle"):
+                    raise tagging.TagError(f"Track {index} isn't an audio or subtitle track")
+                if not tagging.valid_tag(code):
+                    raise tagging.TagError(f"{code} isn't a language Dubarr knows")
+                if current.get(index) != code:
+                    wanted[index] = code
+            if not wanted:
+                return "Nothing to change"
+
+            st = os.stat(path)
+            if st.st_nlink > 1 and not config.process_hardlinked:
+                raise tagging.TagError("The file is hardlinked, probably still seeding. Changing its tags would change "
+                                       "the torrent's data too. Try again once seeding stops")
+
+            message = tagging.describe_changes(info, wanted)
+            try:
+                if path.lower().endswith((".mkv", ".mk3d")):
+                    tagging.tag_mkv(info, wanted)
+                else:
+                    new = tagging.retag_mp4(info, wanted)
+                    swap.swap(self.store, None, path, info.size, new.size, message, [],
+                              swap.recycle_root(library["path"], config.recycle_folder), config.recycle_days)
+            except (RemuxError, swap.SwapError, OSError) as e:
+                raise tagging.TagError(getattr(e, "strerror", None) or str(e))
+
+            logger.log("ACTION", f"{message} in {path}")
+            self.check_file(library, path, reread=True)
+            self.notify(path)
+            return message
 
     def purge(self):
         count = swap.purge(self.store, config.recycle_days)

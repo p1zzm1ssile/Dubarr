@@ -19,6 +19,7 @@ import utils.status as status
 from core import plan as plans
 from core.engine import ERROR, SEEDING, Busy, in_window
 from core.swap import SwapError
+from core.tagging import TagError, audio_sample, subtitle_lines
 from services.connections import Arr, Jellyfin, ServiceError, webhook_paths
 from utils.languages import LANGUAGES
 from utils.logger import logger
@@ -48,6 +49,7 @@ STATUSES = {
     SEEDING: "Waiting for seeding to stop",
     plans.NO_WANTED_AUDIO: "No wanted audio",
     plans.UNKNOWN_AUDIO: "Untagged audio",
+    plans.UNKNOWN_SUBTITLES: "Untagged subtitles",
     ERROR: "Problems",
     plans.NO_AUDIO: "No audio",
     plans.CLEAN: "Already clean",
@@ -186,6 +188,12 @@ class Handler(BaseHTTPRequestHandler):
                     "username": auth.username(),
                     "webhook_path": f"/api/webhook?token={config.webhook_token()}",
                 })
+            if path == "/api/sample":
+                info = engine.known_file(query.get("path", ""))
+                return self.send(200, audio_sample(info, int(query.get("index", -1))), "audio/mpeg")
+            if path == "/api/subtitle-lines":
+                info = engine.known_file(query.get("path", ""))
+                return self.send(200, {"lines": subtitle_lines(info, int(query.get("index", -1)))})
             if path == "/api/logs":
                 return self.send(200, read_logs(query.get("filter", "all")))
             if path == "/api/logs/download":
@@ -194,6 +202,8 @@ class Handler(BaseHTTPRequestHandler):
                 })
 
             self.send(404, {"error": "Not found"})
+        except (TagError, ValueError) as e:
+            self.send(400, {"error": str(e)})
         except Exception as e:
             logger.error(f"Web UI error on {path} | {e}")
             self.send(500, {"error": str(e)})
@@ -269,7 +279,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(400, {"errors": errors})
                 logger.info(f"Settings saved ({', '.join(sorted(changes.keys()))})")
                 # New languages or libraries change what's wanted: re-check (quick, nothing is re-read)
-                if {"audio_languages", "subtitle_languages", "strip_audio", "strip_subtitles",
+                if {"audio_languages", "subtitle_languages", "strip_audio", "strip_subtitles", "strip_commentary",
                         "libraries", "process_hardlinked"} & changes.keys():
                     engine.background(engine.scan, "settings", wait=True)
                 return self.send(200, {"ok": True, "values": config.public_values()})
@@ -301,6 +311,12 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/recheck":
                     engine.background(engine.scan, "manual", [data.get("path", "")])
                     return self.send(200, {"ok": True})
+                if path == "/api/tag":
+                    tags = data.get("tags") or {}
+                    if not isinstance(tags, dict):
+                        raise ValueError("tags must be an object")
+                    message = engine.tag(data.get("path", ""), tags)
+                    return self.send(200, {"ok": True, "message": message})
                 if path == "/api/ignore":
                     engine.store.set_ignored(data.get("path", ""), bool(data.get("ignored")))
                     return self.send(200, {"ok": True})
@@ -315,7 +331,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(200, {"ok": True, "message": "Restoring the whole batch"})
             except Busy as e:
                 return self.send(409, {"error": str(e)})
-            except SwapError as e:
+            except (SwapError, TagError) as e:
                 return self.send(400, {"error": str(e)})
 
             self.send(404, {"error": "Not found"})
@@ -331,7 +347,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def status_report():
     report = status.health()
-    report["activity"] = engine.activity
+    report["activity"] = engine.progress()
     report["report_only"] = config.report_only
     report["in_window"] = in_window(config.active_from, config.active_until)
     report["last_scan"] = engine.last_scan or None

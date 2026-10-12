@@ -6,8 +6,10 @@ The rules:
   * If no audio is in a wanted language, change nothing and warn.
   * If any audio track has no language tag, change nothing and warn:
     there's no way to know it isn't the one you want.
+  * Commentary tracks are removed too, unless that's turned off. The last
+    non-commentary audio in a wanted language is never removed.
   * Keep subtitles in a wanted language, including forced ones. Remove the rest.
-    Subtitles with no language tag are always kept.
+    Subtitles with no language tag are always kept, and flagged so they can be tagged.
 """
 
 from dataclasses import dataclass, field
@@ -20,9 +22,10 @@ CHANGE = "change"                  # has unwanted tracks to remove
 NO_WANTED_AUDIO = "no_wanted_audio"  # warning: none of the audio is in a wanted language
 UNKNOWN_AUDIO = "unknown_audio"    # warning: an audio track isn't tagged with a language
 NO_AUDIO = "no_audio"              # the file has no audio at all
+UNKNOWN_SUBTITLES = "unknown_subtitles"  # nothing to remove, but a subtitle track isn't tagged
 CLEAN = "clean"                    # only wanted tracks, nothing to do
 
-WARNINGS = (NO_WANTED_AUDIO, UNKNOWN_AUDIO, NO_AUDIO)
+WARNINGS = (NO_WANTED_AUDIO, UNKNOWN_AUDIO, NO_AUDIO, UNKNOWN_SUBTITLES)
 
 
 @dataclass
@@ -31,6 +34,7 @@ class Rules:
     subtitle_languages: list
     strip_audio: bool = True
     strip_subtitles: bool = True
+    strip_commentary: bool = True
 
 
 @dataclass
@@ -95,13 +99,27 @@ def decide(info: MediaInfo, rules: Rules) -> Plan:
                 continue
             remove.append(_removal(t, "Unwanted audio language"))
 
+    # Commentary goes too, as long as a proper wanted-language track stays
+    if rules.strip_commentary and any(not t.commentary for t in wanted_audio):
+        removing = {r["index"] for r in remove}
+        for t in audio:
+            if t.commentary and t.index not in removing:
+                remove.append(_removal(t, "Commentary"))
+
     if rules.strip_subtitles:
         for t in subtitles:
             if t.language in rules.subtitle_languages or t.language in (UNDEFINED, MULTIPLE, NO_LANGUAGE):
                 continue
             remove.append(_removal(t, "Unwanted subtitle language"))
 
+    untagged_subs = [t for t in subtitles if t.language == UNDEFINED]
     if not remove:
+        if untagged_subs:
+            count = len(untagged_subs)
+            return Plan(UNKNOWN_SUBTITLES,
+                        f"{count} subtitle track{'s have' if count > 1 else ' has'} no language tag. Tag "
+                        f"{'them' if count > 1 else 'it'} so Dubarr knows whether to keep {'them' if count > 1 else 'it'}",
+                        keep=every)
         return Plan(CLEAN, "Only wanted languages", keep=every)
 
     removed = {r["index"] for r in remove}
@@ -116,12 +134,16 @@ def decide(info: MediaInfo, rules: Rules) -> Plan:
         best = min(kept_audio, key=lambda t: (t.commentary, order.get(t.language, len(order)), t.index))
         default_audio = best.index
 
-    removed_audio = _languages([t for t in audio if t.index in removed])
+    removed_audio = _languages([t for t in audio if t.index in removed and not t.commentary])
     removed_subs = _languages([t for t in subtitles if t.index in removed])
+    commentaries = sum(1 for t in audio if t.index in removed and t.commentary)
     parts = []
     if removed_audio:
         parts.append(f"{describe(removed_audio)} audio")
+    if commentaries:
+        parts.append(f"{commentaries} commentary track{'s' if commentaries > 1 else ''}")
     if removed_subs:
         parts.append(f"{describe(removed_subs)} subtitles")
-    return Plan(CHANGE, "Remove " + " and ".join(parts), remove=remove, keep=keep,
+    text = ", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1 else parts[0]
+    return Plan(CHANGE, "Remove " + text, remove=remove, keep=keep,
                 default_audio=default_audio, saved_bytes=sum(r["size"] for r in remove))

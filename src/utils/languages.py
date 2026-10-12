@@ -118,6 +118,19 @@ def normalise(value) -> str:
     return _ALIASES.get(value) or _ALIASES.get(base) or UNDEFINED
 
 
+# Matroska and MP4 tags traditionally use these older codes where a language has two
+BIBLIOGRAPHIC = {
+    "fra": "fre", "deu": "ger", "nld": "dut", "ces": "cze", "slk": "slo", "ron": "rum", "mkd": "mac",
+    "sqi": "alb", "ell": "gre", "kat": "geo", "hye": "arm", "fas": "per", "zho": "chi", "msa": "may",
+    "mya": "bur", "eus": "baq", "cym": "wel", "isl": "ice",
+}
+
+
+def bibliographic(code: str) -> str:
+    """The code to write into a file's track tag."""
+    return BIBLIOGRAPHIC.get(code, code)
+
+
 def name(code: str) -> str:
     if code in LANGUAGES:
         return LANGUAGES[code][0]

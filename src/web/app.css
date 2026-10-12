@@ -377,3 +377,16 @@ ul.files li.unwanted .fname { color: var(--muted); text-decoration: line-through
 
 /* Contact */
 .row-wrap { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+/* Listen & tag */
+.action-stack { display: flex; flex-direction: column; gap: 0.4rem; align-items: stretch; }
+.tag-panel { margin-top: 0.75rem; padding: 0.9rem 1rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+.tag-track { padding: 0.7rem 0; border-top: 1px solid var(--border); }
+.tag-track.untagged strong { color: var(--warn); }
+.tag-head { display: flex; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
+.tag-controls { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.tag-controls select { width: 220px; }
+.tag-controls button { padding: 0.35rem 0.75rem; font-size: 0.85rem; }
+.tag-preview audio { width: 100%; max-width: 420px; margin-top: 0.5rem; }
+.sub-lines { margin: 0.5rem 0 0; padding: 0.6rem 0.8rem 0.6rem 1.6rem; background: var(--panel-2); border-radius: 8px; font-size: 0.88rem; }
+@media (max-width: 700px) { .tag-controls select { width: 100%; } }

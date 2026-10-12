@@ -20,9 +20,12 @@ It's built to be safe to leave running:
 | Only languages you keep | Leaves it alone |
 | Languages you keep, plus others | Removes the others (audio and subtitles, each can be turned off) |
 | No audio in a language you keep | Leaves it alone, flags it |
-| An audio track with no language tag | Leaves it alone, flags it |
+| An audio track with no language tag | Leaves it alone, flags it until you tag it |
+| Commentary tracks | Removes them (can be turned off) |
 
 Video, chapters, fonts and anything that isn't audio or subtitles is always kept. Subtitles with no language tag are always kept. Forced subtitles in your languages are kept; forced subtitles in other languages are removed. A "multiple languages" audio track counts as wanted.
+
+**Untagged tracks:** press *Listen & tag* on the Dashboard to hear a 30-second sample of an audio track, or read a few lines of a subtitle track, then choose its language. Dubarr writes the tag into the file (MKV files in place, in a moment), so it isn't flagged again. Picture-based subtitles (Blu-ray PGS) can't be shown as text. Files that are still seeding aren't tagged, as that would change the torrent's data.
 
 Languages are set once for everything, and can be overridden per library, e.g. Japanese + English audio for an anime folder.
 
@@ -61,6 +64,7 @@ All optional, under Settings:
 - **Where originals go:** a hidden `.dubarr-recycle` folder at the top of each library, so moving them is instant on the same disk. You can set your own folder instead; on another disk, moving is a full copy.
 - **Restored files are left alone.** After a restore, Dubarr won't strip that file again until you press *Stop leaving alone* on the Dashboard.
 - **Array writes:** rewriting a big remux on a parity array takes a while. Set the hours Dubarr may change files (e.g. 1 to 7 overnight) and how many files it changes at a time.
+- **Progress:** scans and batches show how far along they are and roughly how long is left. For changes the estimate is based on file sizes, so it settles after the first few files.
 - **Interrupted changes are recovered.** If the container stops in the middle of a swap, Dubarr finishes or undoes it on the next start.
 - **Forgotten password:** delete `auth.json` from the config folder and restart.
 - **Keep it on your home network.** Use a VPN such as WireGuard or Tailscale for remote access, rather than a reverse proxy.

@@ -7,7 +7,8 @@ LABEL org.opencontainers.image.description='Dubarr: removes audio and subtitle t
 
 WORKDIR /app
 
-# ffprobe reads the tracks, mkvmerge (MKV) and ffmpeg (MP4) write the cleaned copy.
+# ffprobe reads the tracks, mkvmerge (MKV) and ffmpeg (MP4) write the cleaned copy,
+# mkvpropedit sets language tags in place, and ffmpeg makes the audio samples.
 # Nothing is re-encoded, so no GPU is needed.
 RUN apk add --no-cache python3 py3-pip ffmpeg mkvtoolnix
 COPY ./src/requirements.txt .
