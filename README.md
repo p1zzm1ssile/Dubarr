@@ -23,6 +23,7 @@ It's built to be safe to leave running:
 | An audio track with no language tag | Leaves it alone, flags it until you tag it |
 | Commentary tracks | Removes them (can be turned off) |
 | Several audio tracks in one language | Keeps the best-quality one (can be turned off) |
+| Subtitle files beside the film (Film.fr.srt) in other languages | Removes them, no rewrite needed (can be turned off) |
 | Several subtitle tracks in one language | Keeps one full track, preferring text (SRT) and normal over SDH, plus the forced one (can be turned off) |
 
 Video, chapters, fonts and anything that isn't audio or subtitles is always kept. Subtitles with no language tag are always kept. Forced subtitles in your languages are kept; forced subtitles in other languages are removed. A "multiple languages" audio track counts as wanted.
@@ -53,9 +54,11 @@ docker run -d --name dubarr \
 
 Every setting is in the web UI. To pre-fill them on first start, see `.env.tmpl` for the environment variables.
 
-## Radarr, Sonarr and Jellyfin
+## Radarr, Sonarr, Bazarr and Jellyfin
 
 All optional, under Settings:
+
+- **Bazarr:** after a change, Bazarr looks at the film again straight away, and searches for subtitles if the change left none in your languages. Dubarr also warns when a Bazarr language profile downloads a language Dubarr removes. Let Bazarr be the only thing downloading subtitles: in each Jellyfin library, untick every language under **Subtitle downloads**.
 
 - **Rescans:** add the address and API key, and Dubarr asks them to rescan each file it changes.
 - **Check new imports straight away:** in Radarr or Sonarr, Settings > Connect > + > Webhook, tick *On Import* and *On Upgrade*, method POST, and paste the address shown on Dubarr's Radarr or Sonarr settings tab. Without it, new files are picked up at the next scheduled scan.
@@ -66,6 +69,7 @@ All optional, under Settings:
 - **Where originals go:** a hidden `.dubarr-recycle` folder at the top of each library, so moving them is instant on the same disk. You can set your own folder instead; on another disk, moving is a full copy.
 - **Restored files are left alone.** After a restore, Dubarr won't strip that file again until you press *Stop leaving alone* on the Dashboard.
 - **Array writes:** rewriting a big remux on a parity array takes a while. Set the hours Dubarr may change files (e.g. 1 to 7 overnight) and how many files it changes at a time.
+- **CPU and disk:** Dubarr runs ffmpeg and mkvmerge at low priority by default, so a Jellyfin transcode always comes first. With films spread over several disks, raise **Workers** to change more at once; Dubarr never puts two workers on the same disk.
 - **Progress:** scans and batches show how far along they are and roughly how long is left. For changes the estimate is based on file sizes, so it settles after the first few files.
 - **Interrupted changes are recovered.** If the container stops in the middle of a swap, Dubarr finishes or undoes it on the next start.
 - **Forgotten password:** delete `auth.json` from the config folder and restart.

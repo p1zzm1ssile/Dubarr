@@ -286,3 +286,40 @@ def test_slider_setting():
     assert config.coerce(field, "50") == 50
     with pytest.raises(ValueError):
         config.coerce(field, 51)
+
+
+def test_subtitle_files_beside_films(library, engine, tmp_path):
+    film = make_video(str(library / "Film" / "Film.mkv"), audio=("eng", "ita"))
+    french = library / "Film" / "Film.fr.srt"
+    english = library / "Film" / "Film.en.srt"
+    french.write_text("1\n00:00:01,000 --> 00:00:02,000\nBonjour\n")
+    english.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n")
+    os.link(film, tmp_path / "seeding.mkv")  # the film itself has to wait
+
+    engine.scan()
+    row = engine.store.file(film)
+    assert row["status"] == plans.CHANGE
+    assert row["message"].startswith("Remove 1 French subtitle file. The rest waits")
+    engine.apply("manual", force=True)
+    assert not french.exists() and english.exists()
+    assert tracks(film, "audio") == ["eng", "ita"]  # untouched while seeding
+    assert engine.store.file(film)["status"] == SEEDING
+
+    # Restoring the file puts it back, and the film is then left alone
+    entry = engine.store.history()[1][0]
+    assert entry["video"] == film and entry["state"] == "done"
+    engine.restore(entry["id"])
+    assert french.read_text().endswith("Bonjour\n")
+    assert engine.store.file(film)["ignored"]
+
+
+def test_several_workers(library, engine, monkeypatch):
+    monkeypatch.setattr(config, "workers", 3)
+    monkeypatch.setattr(config, "low_priority", True)
+    monkeypatch.setattr(config, "ffmpeg_threads", 1)
+    films = [make_video(str(library / f"{n}{'.mp4' if n % 2 else '.mkv'}"), audio=("eng", "ita")) for n in range(5)]
+    engine.scan()
+    engine.apply("manual", force=True)
+    for film in films:
+        assert tracks(film, "audio") == ["eng"]
+    assert engine.store.runs()[0]["changed"] == 5

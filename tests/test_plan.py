@@ -271,3 +271,60 @@ def test_trusting_sdh_labels_when_lengths_are_unknown():
     assert decide(media(VIDEO, audio("eng"), sub("eng"), sub("eng")), trusting).status == plans.CLEAN
     assert decide(media(VIDEO, audio("eng"), sub("eng", hearing_impaired=True), sub("eng", hearing_impaired=True)),
                   trusting).status == plans.CLEAN
+
+
+def test_sidecar_names(tmp_path):
+    from core.probe import find_sidecars
+    (tmp_path / "Film (2020).mkv").write_bytes(b"")
+    for name in ("Film (2020).en.srt", "Film (2020).fr.srt", "Film (2020).eng.forced.srt", "Film (2020).en.hi.srt",
+                 "Film (2020).German.sdh.ass", "Film (2020).srt", "Film (2020).hi.srt", "Film (2020).en.sup",
+                 "Other Film.fr.srt", "Film (2020).nfo", ".Film (2020).fr.srt"):
+        (tmp_path / name).write_text("x")
+    found = {f["path"].split("/")[-1]: (f["language"], f["forced"], f["hearing_impaired"], f["text"])
+             for f in find_sidecars(str(tmp_path / "Film (2020).mkv"))}
+    assert found == {
+        "Film (2020).en.srt": ("eng", False, False, True),
+        "Film (2020).fr.srt": ("fra", False, False, True),
+        "Film (2020).eng.forced.srt": ("eng", True, False, True),
+        "Film (2020).en.hi.srt": ("eng", False, True, True),  # "hi" after the language means hearing impaired
+        "Film (2020).German.sdh.ass": ("deu", False, True, True),
+        "Film (2020).srt": ("und", False, False, True),        # no language in the name: kept
+        "Film (2020).hi.srt": ("hin", False, False, True),     # first, it's Hindi
+        "Film (2020).en.sup": ("eng", False, False, False),
+    }
+
+
+def sidecar(lang, text=True, forced=False, size=50_000):
+    return {"path": f"/m/film.{lang}.srt", "language": lang, "format": "srt" if text else "sup", "text": text,
+            "forced": forced, "hearing_impaired": False, "size": size}
+
+
+def test_unwanted_subtitle_files_are_removed():
+    info = media(VIDEO, audio("eng"), sub("eng"))
+    info.external = [sidecar("eng"), sidecar("fra"), sidecar("deu"), sidecar("und")]
+    p = decide(info, ENGLISH)
+    assert p.status == plans.CHANGE and not p.rewrites
+    assert [f["language"] for f in p.remove_files] == ["fra", "deu"]
+    assert p.message == "Remove 2 French + German subtitle files"
+    assert decide(info, Rules(["eng"], ["eng"], strip_subtitle_files=False)).status == plans.CLEAN
+
+
+def test_files_and_tracks_together():
+    info = media(VIDEO, audio("eng"), audio("ita"))
+    info.external = [sidecar("ita")]
+    p = decide(info, ENGLISH)
+    assert p.rewrites and len(p.remove_files) == 1
+    assert p.message == "Remove Italian audio and 1 Italian subtitle file"
+    # Only the files, when the video has to wait
+    files_only = decide(info, ENGLISH, tracks=False)
+    assert not files_only.rewrites and len(files_only.remove_files) == 1
+
+
+def test_picture_subtitles_go_when_a_text_file_is_beside_the_film():
+    info = media(VIDEO, audio("eng"), sub("eng", codec="hdmv_pgs_subtitle", frames=1500),
+                 sub("eng", codec="hdmv_pgs_subtitle", forced=True, frames=20))
+    info.external = [sidecar("eng")]
+    assert decide(info, ENGLISH).status == plans.CLEAN  # off by default
+    p = decide(info, Rules(["eng"], ["eng"], prefer_text_files=True))
+    assert [r["index"] for r in p.remove] == [2]  # the forced picture track stays
+    assert "1 picture subtitle track (a text file replaces it)" in p.message

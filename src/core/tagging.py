@@ -13,6 +13,7 @@ import subprocess
 from core.probe import MediaInfo, ProbeError, probe
 from core.remux import check_ids, mkvmerge_ids, temp_path
 from utils.languages import LANGUAGES, NO_LANGUAGE, bibliographic, name
+from utils.proc import ffmpeg_threads, wrap
 
 # Subtitles that are text, so they can be shown. Picture-based ones (PGS, VobSub) can't.
 TEXT_SUBTITLES = {"subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "text", "tx3g"}
@@ -30,7 +31,7 @@ def valid_tag(code: str) -> bool:
 
 def _run(command, timeout, binary=False):
     try:
-        result = subprocess.run(command, capture_output=True, timeout=timeout, text=not binary)
+        result = subprocess.run(wrap(command), capture_output=True, timeout=timeout, text=not binary)
     except subprocess.TimeoutExpired:
         raise TagError(f"{command[0]} took too long")
     except FileNotFoundError:
@@ -50,7 +51,7 @@ def audio_sample(info: MediaInfo, index: int, seconds: int = 30) -> bytes:
     _track(info, index, "audio")
     start = int(info.duration * 0.25) if info.duration > seconds * 3 else 0
     result = _run(["ffmpeg", "-nostdin", "-v", "error", "-ss", str(start), "-i", info.path, "-map", f"0:{index}",
-                   "-t", str(seconds), "-vn", "-ac", "2", "-c:a", "libmp3lame", "-b:a", "96k", "-f", "mp3", "pipe:1"],
+                   "-t", str(seconds), "-vn", *ffmpeg_threads(), "-ac", "2", "-c:a", "libmp3lame", "-b:a", "96k", "-f", "mp3", "pipe:1"],
                   timeout=120, binary=True)
     if result.returncode != 0 or not result.stdout:
         errors = (result.stderr or b"").decode(errors="replace").strip().splitlines()
@@ -113,7 +114,7 @@ def retag_mp4(info: MediaInfo, changes: dict) -> MediaInfo:
                "-map_metadata", "0", "-map_chapters", "0"]
     for index, code in sorted(changes.items()):
         command += [f"-metadata:s:{index}", f"language={bibliographic(code)}"]
-    command += ["-movflags", "+faststart", "-f", "mp4", target]
+    command += ffmpeg_threads() + ["-movflags", "+faststart", "-f", "mp4", target]
     try:
         result = _run(command, timeout=6 * 3600)
         if result.returncode != 0 or not os.path.exists(target):

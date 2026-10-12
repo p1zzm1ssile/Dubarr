@@ -179,7 +179,15 @@ function trackChips(file) {
         .filter(Boolean).join(" · "),
       text: label,
     });
-  }));
+  }).concat((file.files || []).map((f) => {
+    const gone = (file.remove_files || []).includes(f.path);
+    const extra = [f.forced && "forced", f.hearing_impaired && "SDH"].filter(Boolean);
+    return el("span", {
+      class: `track sub file${gone ? " removed" : ""}`,
+      title: [f.path.split("/").pop(), f.size ? bytes(f.size) : "", gone ? "will be removed" : "kept"].filter(Boolean).join(" · "),
+      text: `${langName(f.language)} subs · ${f.format.toUpperCase()} file${extra.length ? ` (${extra.join(", ")})` : ""}`,
+    });
+  })));
 }
 
 function languageSelect(current) {
@@ -339,7 +347,7 @@ async function showDashboard(selected) {
           el("div", { class: "title", text: name }),
           el("div", { class: "path mono", text: folder }),
           el("div", { class: "small", text: f.message + (f.saved_bytes ? ` · saves ${bytes(f.saved_bytes)}` : "") }),
-          f.tracks.length ? trackChips(f) : null,
+          f.tracks.length || (f.files || []).length ? trackChips(f) : null,
           panel),
         el("td", { class: "actions" }, el("div", { class: "action-stack" }, actions)));
     });
@@ -402,6 +410,12 @@ async function showDashboard(selected) {
     }
     for (const lib of d.libraries.filter((l) => !l.exists)) {
       notices.append(el("div", { class: "notice bad", text: `The library folder ${lib.path} doesn't exist inside the container. Check its path mapping.` }));
+    }
+    for (const clash of d.bazarr_clashes || []) {
+      notices.append(el("div", { class: "notice warn" }, el("strong", { text: "Bazarr and Dubarr disagree. " }),
+        `Bazarr's "${clash.profile}" profile downloads ${clash.languages.join(", ")} subtitles, which Dubarr removes, so they'd keep coming back. `,
+        "Remove them from the profile in Bazarr (Settings > Languages), or add them to Dubarr's subtitle languages in ",
+        el("a", { href: "#/settings/general", text: "Settings" }), "."));
     }
     if (d.report_only && d.libraries.length) {
       notices.append(el("div", { class: "notice" }, el("strong", { text: "Report only is on. " }),
@@ -703,12 +717,13 @@ function webhookPanel(tab) {
     el("p", { class: "help", text: "The address contains a secret. Keep it private, like an API key." }));
 }
 
-const TESTABLE = { radarr: "radarr", sonarr: "sonarr", jellyfin: "jellyfin" };
+const TESTABLE = { radarr: "radarr", sonarr: "sonarr", bazarr: "bazarr", jellyfin: "jellyfin" };
 
 const TAB_INTRO = {
   libraries: "The folders Dubarr checks, as they're mapped inside the Dubarr container. Leave the languages empty to use the ones on the General tab, or set them for one library, e.g. Japanese, English audio for anime. Separate languages with commas.",
   radarr: "Optional. After changing a film, Dubarr asks Radarr to rescan it, so Radarr shows the new tracks and size.",
   sonarr: "Optional. After changing an episode, Dubarr asks Sonarr to rescan the series, so Sonarr shows the new tracks and size.",
+  bazarr: "Optional. After changing a film, Dubarr asks Bazarr to look at it again straight away, and to search for subtitles if the change left none in your languages. Test connection also checks Bazarr's language profiles: a language Bazarr downloads but Dubarr removes would keep coming back.",
   jellyfin: "Optional. After changing a file, Dubarr tells Jellyfin, so the audio and subtitle menus update without a full library scan.",
 };
 

@@ -11,6 +11,9 @@ The rules:
     in a wanted language is never removed.
   * Keep subtitles in a wanted language, including forced ones. Remove the rest.
     Subtitles with no language tag are always kept, and flagged so they can be tagged.
+  * Subtitle files beside the video (Film.fr.srt) in languages you don't keep are
+    removed too. That's just a file delete, no rewrite. Files whose name doesn't
+    say a language are kept.
   * Duplicates (both can be turned off), picked for Jellyfin:
       audio: keep the best-quality track per wanted language. Jellyfin converts
       audio on the fly for devices that can't play it, which is cheap, so a
@@ -46,6 +49,8 @@ class Rules:
     one_audio_per_language: bool = True
     one_subtitle_per_language: bool = True
     assume_unlabelled_is_full: bool = False
+    strip_subtitle_files: bool = True
+    prefer_text_files: bool = False
 
 
 @dataclass
@@ -57,6 +62,12 @@ class Plan:
     default_audio: int = None                    # index to mark as the default audio track, if it needs changing
     mark_forced: list = field(default_factory=list)  # subtitle tracks that are forced but not flagged as such
     saved_bytes: int = 0                         # roughly how much smaller the file gets (0 if unknown)
+    remove_files: list = field(default_factory=list)  # subtitle files beside the video to remove
+
+    @property
+    def rewrites(self):
+        """Whether tracks come out of the video itself, which means writing a new copy of it."""
+        return bool(self.remove)
 
     @property
     def changes(self):
@@ -66,7 +77,7 @@ class Plan:
         return {
             "status": self.status, "message": self.message, "remove": self.remove,
             "keep": self.keep, "default_audio": self.default_audio, "saved_bytes": self.saved_bytes,
-            "mark_forced": self.mark_forced,
+            "mark_forced": self.mark_forced, "remove_files": self.remove_files,
         }
 
 
@@ -75,6 +86,14 @@ def _languages(tracks):
     for t in tracks:
         if t.language not in seen:
             seen.append(t.language)
+    return seen
+
+
+def _file_languages(files):
+    seen = []
+    for f in files:
+        if f["language"] not in seen:
+            seen.append(f["language"])
     return seen
 
 
@@ -166,7 +185,9 @@ def _subtitles_to_keep(same, assume_unlabelled_is_full=False):
     return keep
 
 
-def decide(info: MediaInfo, rules: Rules) -> Plan:
+def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
+    """What to do with a file. With tracks=False only subtitle files beside it are considered, for when
+    rewriting the video has to wait (still seeding, or not worth it) but the files can go now."""
     audio = info.of("audio")
     subtitles = info.of("subtitle")
     every = [t.index for t in info.tracks]
@@ -189,45 +210,62 @@ def decide(info: MediaInfo, rules: Rules) -> Plan:
                     keep=every)
 
     remove = []
-    if rules.strip_audio:
+    if tracks and rules.strip_audio:
         for t in audio:
             if t in wanted_audio or t.language == NO_LANGUAGE:
                 continue
             remove.append(_removal(t, "Unwanted audio language"))
 
     # Commentary goes too, as long as a proper wanted-language track stays
-    if rules.strip_commentary and any(not t.commentary for t in wanted_audio):
+    if tracks and rules.strip_commentary and any(not t.commentary for t in wanted_audio):
         removing = {r["index"] for r in remove}
         for t in audio:
             if t.commentary and t.index not in removing:
                 remove.append(_removal(t, "Commentary"))
 
-    if rules.strip_subtitles:
+    if tracks and rules.strip_subtitles:
         for t in subtitles:
             if t.language in rules.subtitle_languages or t.language in (UNDEFINED, MULTIPLE, NO_LANGUAGE):
                 continue
             remove.append(_removal(t, "Unwanted subtitle language"))
 
     # Subtitles of a commentary are no use once the commentary is gone
-    if rules.strip_commentary:
+    if tracks and rules.strip_commentary:
         removing = {r["index"] for r in remove}
         for t in subtitles:
             if t.commentary and t.index not in removing:
                 remove.append(_removal(t, "Commentary subtitles"))
 
     # Duplicates in the languages you keep
-    if rules.one_audio_per_language:
+    if tracks and rules.one_audio_per_language:
         removing = {r["index"] for r in remove}
         for t in _duplicates(audio, rules.audio_languages, removing, lambda same: [best_audio(same)]):
             remove.append(_removal(t, "Duplicate audio"))
-    if rules.one_subtitle_per_language:
+    if tracks and rules.one_subtitle_per_language:
         removing = {r["index"] for r in remove}
         pick = lambda same: _subtitles_to_keep(same, rules.assume_unlabelled_is_full)
         for t in _duplicates(subtitles, rules.subtitle_languages, removing, pick):
             remove.append(_removal(t, "Duplicate subtitles"))
 
+    # Picture subtitles are redundant once a text version sits beside the film: Jellyfin shows text without
+    # transcoding the video. Forced tracks stay, as a full subtitle file doesn't replace them.
+    if tracks and rules.prefer_text_files:
+        removing = {r["index"] for r in remove}
+        text_files = {f["language"] for f in info.external if f["text"] and not f["forced"]}
+        for t in subtitles:
+            if (t.index not in removing and t.language in text_files and t.language in rules.subtitle_languages
+                    and not t.forced and t.codec.lower() not in SUBTITLE_CODECS):
+                remove.append(_removal(t, "Picture subtitles, with a text file beside the film"))
+
+    # Subtitle files beside the film
+    remove_files = []
+    if rules.strip_subtitle_files:
+        for f in info.external:
+            if f["language"] not in rules.subtitle_languages and f["language"] not in (UNDEFINED, MULTIPLE, NO_LANGUAGE):
+                remove_files.append({**f, "reason": "Unwanted subtitle file"})
+
     untagged_subs = [t for t in subtitles if t.language == UNDEFINED]
-    if not remove:
+    if not remove and not remove_files:
         if untagged_subs:
             count = len(untagged_subs)
             return Plan(UNKNOWN_SUBTITLES,
@@ -238,6 +276,10 @@ def decide(info: MediaInfo, rules: Rules) -> Plan:
 
     removed = {r["index"] for r in remove}
     keep = [i for i in every if i not in removed]
+    if not remove:
+        n = len(remove_files)
+        return Plan(CHANGE, f"Remove {n} {describe(_file_languages(remove_files))} subtitle file{'s' if n > 1 else ''}",
+                    keep=keep, remove_files=remove_files)
 
     # Flag forced subtitles that nobody flagged, so Jellyfin shows them for foreign-language scenes by itself
     mark_forced = []
@@ -277,6 +319,14 @@ def decide(info: MediaInfo, rules: Rules) -> Plan:
     if duplicate_subs:
         n = sum(1 for r in remove if r["reason"] == "Duplicate subtitles")
         parts.append(f"{n} extra {describe(duplicate_subs)} subtitle track{'s' if n > 1 else ''}")
+    picture = sum(1 for r in remove if r["reason"].startswith("Picture subtitles"))
+    if picture:
+        parts.append(f"{picture} picture subtitle track{'s' if picture > 1 else ''} (a text file replaces "
+                     f"{'them' if picture > 1 else 'it'})")
+    if remove_files:
+        n = len(remove_files)
+        parts.append(f"{n} {describe(_file_languages(remove_files))} subtitle file{'s' if n > 1 else ''}")
     text = ", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1 else parts[0]
     return Plan(CHANGE, "Remove " + text, remove=remove, keep=keep,
-                default_audio=default_audio, mark_forced=mark_forced, saved_bytes=sum(r["size"] for r in remove))
+                default_audio=default_audio, mark_forced=mark_forced, saved_bytes=sum(r["size"] for r in remove),
+                remove_files=remove_files)
