@@ -144,16 +144,38 @@ const STATUS_HELP = {
   ignored: "Files you restored. Dubarr leaves them alone until you say otherwise.",
 };
 
+const CODEC_NAMES = {
+  truehd: "TrueHD", eac3: "DD+", ac3: "Dolby Digital", dts: "DTS", aac: "AAC", flac: "FLAC", opus: "Opus",
+  mp3: "MP3", vorbis: "Vorbis", alac: "ALAC", subrip: "SRT", srt: "SRT", ass: "ASS", ssa: "SSA", webvtt: "WebVTT",
+  mov_text: "Text", hdmv_pgs_subtitle: "PGS", dvd_subtitle: "VobSub", dvb_subtitle: "DVB",
+};
+const CHANNELS = { 1: "mono", 2: "stereo", 6: "5.1", 7: "6.1", 8: "7.1" };
+
+function format(t) {
+  let name = CODEC_NAMES[t.codec] || (t.codec.startsWith("pcm") ? "PCM" : t.codec.toUpperCase());
+  const profile = (t.profile || "").toLowerCase();
+  if (t.codec === "dts" && profile.includes("hd ma")) name = "DTS-HD MA";
+  else if (t.codec === "dts" && profile.includes("hd")) name = "DTS-HD";
+  if (profile.includes("dts:x")) name = "DTS:X";
+  if (profile.includes("atmos")) name += " Atmos";
+  if (t.type === "audio" && t.channels) name += ` ${CHANNELS[t.channels] || `${t.channels}ch`}`;
+  return name;
+}
+
 function trackChips(file) {
   const removed = new Set(file.remove);
+  const willForce = new Set(file.mark_forced || []);
   return el("div", { class: "tracks" }, file.tracks.map((t) => {
     const kind = t.type === "audio" ? "audio" : "subs";
-    const extra = [t.forced && "forced", t.commentary && "commentary", t.hearing_impaired && "SDH"].filter(Boolean);
-    const label = `${langName(t.language)} ${kind}${extra.length ? ` (${extra.join(", ")})` : ""}`;
+    const extra = [(t.forced || willForce.has(t.index)) && "forced", t.commentary && "commentary", t.hearing_impaired && "SDH",
+      t.visual_impaired && "audio description"].filter(Boolean);
+    const label = `${langName(t.language)} ${kind} · ${format(t)}${extra.length ? ` (${extra.join(", ")})` : ""}`;
     return el("span", {
       class: `track${t.type === "subtitle" ? " sub" : ""}${removed.has(t.index) ? " removed" : ""}`,
-      title: [t.codec, t.channels ? `${t.channels} channels` : "", t.title, t.raw_language ? `tagged "${t.raw_language}"` : "untagged",
-        removed.has(t.index) ? "will be removed" : "kept"].filter(Boolean).join(" · "),
+      title: [t.title ? `“${t.title}”` : "", t.frames && t.type === "subtitle" ? `${t.frames} lines` : "",
+        t.size ? bytes(t.size) : "", t.raw_language ? `tagged "${t.raw_language}"` : "untagged",
+        removed.has(t.index) ? "will be removed" : willForce.has(t.index) ? "kept, and flagged as forced" : "kept"]
+        .filter(Boolean).join(" · "),
       text: label,
     });
   }));

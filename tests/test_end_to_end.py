@@ -243,3 +243,19 @@ def test_progress_estimate(engine):
         engine.activity.update(started=time.time() - 60, bytes_total=400, bytes_done=100, total=4, done=1)
         p = engine.progress()
     assert 175 <= p["eta_seconds"] <= 185  # a quarter done in a minute: three more minutes
+
+
+@pytest.mark.parametrize("ext", [".mkv", ".mp4"])
+def test_duplicates_removed_and_forced_flagged(library, engine, ext, tmp_path):
+    film = make_video(str(library / f"x{ext}"), audio=("eng", "eng"), subtitles=("eng", "eng"))
+    info = probe(film)
+    # Make the second subtitle look like a short forced track and the first like a full one
+    from core.plan import Rules, decide
+    for t, frames in zip(info.of("subtitle"), (900, 5)):
+        t.frames = frames
+    p = decide(info, Rules(["eng"], ["eng"]))
+    assert p.mark_forced == [info.of("subtitle")[1].index]
+    from core.remux import remux
+    new = remux(info, p)
+    assert [t.forced for t in new.of("subtitle")] == [False, True]
+    assert len(new.of("audio")) == 1

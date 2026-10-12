@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- **One audio track per language.** Keeps the best-quality track in each language you keep (e.g. Dolby Atmos over the extra 5.1 and stereo copies) and removes the rest. Jellyfin converts audio on the fly for devices that can't play it, without touching the video. Audio description tracks are never picked.
+- **One subtitle track per language, plus forced.** Keeps one full track per language, choosing text (SRT) over pictures (PGS) because Jellyfin shows text without transcoding the video, and normal over SDH. Forced subtitles are kept, including ones nobody flagged, and get the forced flag so Jellyfin shows them for foreign-language scenes by itself.
+- **Formats on the Dashboard.** Each track shows its format, e.g. "English audio · TrueHD Atmos 7.1" or "English subs · PGS".
+- Both new rules are on by default and can be turned off in Settings > General.
+- The first scan after updating reads every file again, to pick up the extra details. It takes a little longer than usual.
+
 ## 0.2.1
 
 - **Commentary subtitles go with the commentary.** When commentary tracks are removed, the subtitle tracks of that commentary are removed too, rather than being left behind.

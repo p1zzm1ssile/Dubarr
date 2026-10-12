@@ -280,6 +280,7 @@ class Handler(BaseHTTPRequestHandler):
                 logger.info(f"Settings saved ({', '.join(sorted(changes.keys()))})")
                 # New languages or libraries change what's wanted: re-check (quick, nothing is re-read)
                 if {"audio_languages", "subtitle_languages", "strip_audio", "strip_subtitles", "strip_commentary",
+                        "one_audio_per_language", "one_subtitle_per_language",
                         "libraries", "process_hardlinked"} & changes.keys():
                     engine.background(engine.scan, "settings", wait=True)
                 return self.send(200, {"ok": True, "values": config.public_values()})
@@ -387,6 +388,7 @@ def files(query):
             "size": r["size"], "checked_at": r["checked_at"], "ignored": r["ignored"],
             "tracks": [t for t in info.get("tracks", []) if t["type"] in ("audio", "subtitle")],
             "remove": [t["index"] for t in (r["plan"] or {}).get("remove", [])],
+            "mark_forced": (r["plan"] or {}).get("mark_forced", []),
         })
     return {"total": total, "files": out}
 

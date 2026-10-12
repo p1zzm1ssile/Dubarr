@@ -22,6 +22,8 @@ It's built to be safe to leave running:
 | No audio in a language you keep | Leaves it alone, flags it |
 | An audio track with no language tag | Leaves it alone, flags it until you tag it |
 | Commentary tracks | Removes them (can be turned off) |
+| Several audio tracks in one language | Keeps the best-quality one (can be turned off) |
+| Several subtitle tracks in one language | Keeps one full track, preferring text (SRT) and normal over SDH, plus the forced one (can be turned off) |
 
 Video, chapters, fonts and anything that isn't audio or subtitles is always kept. Subtitles with no language tag are always kept. Forced subtitles in your languages are kept; forced subtitles in other languages are removed. A "multiple languages" audio track counts as wanted.
 

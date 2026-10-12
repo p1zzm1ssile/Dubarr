@@ -11,6 +11,13 @@ The rules:
     in a wanted language is never removed.
   * Keep subtitles in a wanted language, including forced ones. Remove the rest.
     Subtitles with no language tag are always kept, and flagged so they can be tagged.
+  * Duplicates (both can be turned off), picked for Jellyfin:
+      audio: keep the best-quality track per wanted language. Jellyfin converts
+      audio on the fly for devices that can't play it, which is cheap, so a
+      lower-quality copy isn't needed.
+      subtitles: keep one full track per wanted language, plus the forced one.
+      Text beats pictures (Jellyfin shows text without transcoding the video),
+      normal beats SDH.
 """
 
 from dataclasses import dataclass, field
@@ -36,6 +43,8 @@ class Rules:
     strip_audio: bool = True
     strip_subtitles: bool = True
     strip_commentary: bool = True
+    one_audio_per_language: bool = True
+    one_subtitle_per_language: bool = True
 
 
 @dataclass
@@ -45,6 +54,7 @@ class Plan:
     remove: list = field(default_factory=list)   # tracks to remove, as dicts with a "reason"
     keep: list = field(default_factory=list)     # indexes of the tracks that stay
     default_audio: int = None                    # index to mark as the default audio track, if it needs changing
+    mark_forced: list = field(default_factory=list)  # subtitle tracks that are forced but not flagged as such
     saved_bytes: int = 0                         # roughly how much smaller the file gets (0 if unknown)
 
     @property
@@ -55,6 +65,7 @@ class Plan:
         return {
             "status": self.status, "message": self.message, "remove": self.remove,
             "keep": self.keep, "default_audio": self.default_audio, "saved_bytes": self.saved_bytes,
+            "mark_forced": self.mark_forced,
         }
 
 
@@ -69,6 +80,84 @@ def _languages(tracks):
 def _removal(track, reason):
     return {"index": track.index, "type": track.type, "language": track.language, "codec": track.codec,
             "title": track.title, "forced": track.forced, "size": track.size, "reason": reason}
+
+
+# Higher is better. Lossless first, then by how much of the original sound survives.
+AUDIO_CODECS = {"truehd": 9, "mlp": 9, "flac": 8, "pcm": 8, "alac": 8, "dts": 6, "eac3": 5, "ac3": 4,
+                "opus": 3, "vorbis": 3, "aac": 3, "mp3": 2, "mp2": 1}
+# Lower is better for Jellyfin: plain text it can show on any device, then styled text, then pictures
+SUBTITLE_CODECS = {"subrip": 0, "srt": 0, "mov_text": 1, "webvtt": 1, "text": 1, "tx3g": 1, "ass": 2, "ssa": 2}
+PICTURE_SUBTITLES = 5
+
+
+def audio_quality(t):
+    codec = t.codec.lower()
+    if codec.startswith("pcm"):
+        codec = "pcm"
+    score = AUDIO_CODECS.get(codec, 0)
+    profile = t.profile.lower()
+    if codec == "dts":
+        if "hd ma" in profile or "dts:x" in profile:
+            score = 8  # DTS-HD Master Audio and DTS:X are lossless
+        elif "hd" in profile:
+            score = 7
+    if "atmos" in profile or "joc" in profile:
+        score += 0.5
+    return (score, t.channels, t.size)
+
+
+def best_audio(tracks):
+    """The track to keep: not a description for the blind, then the best sound."""
+    return max(tracks, key=lambda t: (not t.visual_impaired, audio_quality(t), -t.index))
+
+
+def _length(track, same_language):
+    """How much a subtitle track holds: its number of lines, or failing that its size. None if unknown."""
+    if all(t.frames for t in same_language):
+        return track.frames
+    # Sizes only compare like with like: text subtitles are a fraction of the size of picture ones
+    is_text = {t.codec.lower() in SUBTITLE_CODECS for t in same_language}
+    if all(t.size for t in same_language) and len(is_text) == 1:
+        return track.size
+    return None
+
+
+def likely_forced(track, same_language):
+    """Forced subtitles only cover foreign-language scenes, so they're a fraction of the length of the full ones,
+    even when nobody flagged them."""
+    if track.forced:
+        return True
+    length = _length(track, same_language)
+    most = max(_length(t, same_language) for t in same_language)
+    return bool(length and most and length < most * 0.2)
+
+
+def subtitle_rank(t):
+    """Lower is better."""
+    return (SUBTITLE_CODECS.get(t.codec.lower(), PICTURE_SUBTITLES), t.hearing_impaired, not t.default, t.index)
+
+
+def _duplicates(tracks, languages, removing, pick):
+    """For each language, the tracks to remove so only pick(tracks) stay."""
+    extra = []
+    for code in languages:
+        same = [t for t in tracks if t.language == code and t.index not in removing and not t.commentary]
+        if len(same) > 1:
+            keep = pick(same)
+            extra += [t for t in same if t not in keep]
+    return extra
+
+
+def _subtitles_to_keep(same):
+    # Without line counts or sizes an unflagged forced track can't be told apart, so keep everything
+    if _length(same[0], same) is None:
+        return same
+    forced = [t for t in same if likely_forced(t, same)]
+    full = [t for t in same if t not in forced]
+    keep = [min(full, key=subtitle_rank)] if full else []
+    if forced:
+        keep.append(min(forced, key=subtitle_rank))
+    return keep
 
 
 def decide(info: MediaInfo, rules: Rules) -> Plan:
@@ -120,6 +209,16 @@ def decide(info: MediaInfo, rules: Rules) -> Plan:
             if t.commentary and t.index not in removing:
                 remove.append(_removal(t, "Commentary subtitles"))
 
+    # Duplicates in the languages you keep
+    if rules.one_audio_per_language:
+        removing = {r["index"] for r in remove}
+        for t in _duplicates(audio, rules.audio_languages, removing, lambda same: [best_audio(same)]):
+            remove.append(_removal(t, "Duplicate audio"))
+    if rules.one_subtitle_per_language:
+        removing = {r["index"] for r in remove}
+        for t in _duplicates(subtitles, rules.subtitle_languages, removing, _subtitles_to_keep):
+            remove.append(_removal(t, "Duplicate subtitles"))
+
     untagged_subs = [t for t in subtitles if t.language == UNDEFINED]
     if not remove:
         if untagged_subs:
@@ -133,6 +232,13 @@ def decide(info: MediaInfo, rules: Rules) -> Plan:
     removed = {r["index"] for r in remove}
     keep = [i for i in every if i not in removed]
 
+    # Flag forced subtitles that nobody flagged, so Jellyfin shows them for foreign-language scenes by itself
+    mark_forced = []
+    for code in rules.subtitle_languages:
+        same = [t for t in subtitles if t.language == code and t.index not in removed and not t.commentary]
+        if len(same) > 1 and _length(same[0], same) is not None:
+            mark_forced += [t.index for t in same if not t.forced and likely_forced(t, same)]
+
     # If the default audio track is being removed, make the best remaining one the default,
     # so players don't fall back to whatever comes first
     default_audio = None
@@ -142,10 +248,13 @@ def decide(info: MediaInfo, rules: Rules) -> Plan:
         best = min(kept_audio, key=lambda t: (t.commentary, order.get(t.language, len(order)), t.index))
         default_audio = best.index
 
-    removed_audio = _languages([t for t in audio if t.index in removed and not t.commentary])
-    removed_subs = _languages([t for t in subtitles if t.index in removed and not t.commentary])
-    commentaries = sum(1 for t in audio if t.index in removed and t.commentary)
-    commentary_subs = sum(1 for t in subtitles if t.index in removed and t.commentary)
+    reasons = {r["index"]: r["reason"] for r in remove}
+    removed_audio = _languages([t for t in audio if reasons.get(t.index) == "Unwanted audio language"])
+    removed_subs = _languages([t for t in subtitles if reasons.get(t.index) == "Unwanted subtitle language"])
+    commentaries = sum(1 for t in audio if reasons.get(t.index) == "Commentary")
+    commentary_subs = sum(1 for t in subtitles if reasons.get(t.index) == "Commentary subtitles")
+    duplicate_audio = _languages([t for t in audio if reasons.get(t.index) == "Duplicate audio"])
+    duplicate_subs = _languages([t for t in subtitles if reasons.get(t.index) == "Duplicate subtitles"])
     parts = []
     if removed_audio:
         parts.append(f"{describe(removed_audio)} audio")
@@ -155,6 +264,12 @@ def decide(info: MediaInfo, rules: Rules) -> Plan:
         parts.append(f"{commentary_subs} commentary subtitle track{'s' if commentary_subs > 1 else ''}")
     if removed_subs:
         parts.append(f"{describe(removed_subs)} subtitles")
+    if duplicate_audio:
+        n = sum(1 for r in remove if r["reason"] == "Duplicate audio")
+        parts.append(f"{n} extra {describe(duplicate_audio)} audio track{'s' if n > 1 else ''}")
+    if duplicate_subs:
+        n = sum(1 for r in remove if r["reason"] == "Duplicate subtitles")
+        parts.append(f"{n} extra {describe(duplicate_subs)} subtitle track{'s' if n > 1 else ''}")
     text = ", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1 else parts[0]
     return Plan(CHANGE, "Remove " + text, remove=remove, keep=keep,
-                default_audio=default_audio, saved_bytes=sum(r["size"] for r in remove))
+                default_audio=default_audio, mark_forced=mark_forced, saved_bytes=sum(r["size"] for r in remove))

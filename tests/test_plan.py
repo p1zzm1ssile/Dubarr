@@ -171,3 +171,90 @@ def test_commentary_subtitles_go_with_the_commentary():
     assert p.message == "Remove 1 commentary track and 2 commentary subtitle tracks"
     kept = decide(media(VIDEO, audio("eng"), sub("eng", commentary=True)), Rules(["eng"], ["eng"], strip_commentary=False))
     assert kept.status == plans.CLEAN
+
+
+def test_one_subtitle_per_language_prefers_text_and_keeps_forced():
+    # Like A View to a Kill: Blu-ray picture subs, a text copy, SDH, a forced track, and commentary subs
+    p = decide(media(VIDEO, audio("eng"),
+                     sub("eng", codec="hdmv_pgs_subtitle", frames=1500, default=True),
+                     sub("eng", codec="subrip", frames=1490),
+                     sub("eng", codec="subrip", frames=1700, hearing_impaired=True),
+                     sub("eng", codec="hdmv_pgs_subtitle", frames=35),            # forced, but not flagged
+                     sub("eng", codec="subrip", commentary=True, frames=900)), ENGLISH)
+    removed = {r["index"]: r["reason"] for r in p.remove}
+    assert removed == {2: "Duplicate subtitles", 4: "Duplicate subtitles", 6: "Commentary subtitles"}
+    assert p.message == "Remove 1 commentary subtitle track and 2 extra English subtitle tracks"
+
+
+def test_sdh_is_kept_when_it_is_the_only_full_track():
+    p = decide(media(VIDEO, audio("eng"), sub("eng", hearing_impaired=True, frames=1500), sub("eng", forced=True, frames=20)),
+               ENGLISH)
+    assert p.status == plans.CLEAN
+
+
+def test_best_audio_per_language():
+    p = decide(media(VIDEO,
+                     audio("eng", codec="ac3", channels=6, default=True),
+                     audio("eng", codec="truehd", channels=8, profile="Dolby TrueHD + Dolby Atmos"),
+                     audio("eng", codec="aac", channels=2),
+                     audio("eng", codec="eac3", channels=6, visual_impaired=True)), ENGLISH)
+    assert sorted(r["index"] for r in p.remove) == [1, 3, 4]
+    assert p.default_audio == 2  # the kept track becomes the default
+    assert p.message == "Remove 3 extra English audio tracks"
+
+
+def test_dts_hd_ma_beats_lossy():
+    p = decide(media(VIDEO, audio("eng", codec="eac3", channels=6), audio("eng", codec="dts", channels=6,
+                                                                           profile="DTS-HD MA")), ENGLISH)
+    assert [r["index"] for r in p.remove] == [1]
+
+
+def test_duplicates_per_language_for_anime():
+    rules = Rules(["jpn", "eng"], ["eng"])
+    p = decide(media(VIDEO, audio("jpn", codec="flac", channels=2), audio("jpn", codec="aac", channels=2),
+                     audio("eng", codec="aac", channels=2), audio("eng", codec="ac3", channels=6)), rules)
+    assert sorted(r["index"] for r in p.remove) == [2, 3]
+
+
+def test_duplicate_rules_can_be_turned_off():
+    tracks = (VIDEO, audio("eng", codec="ac3"), audio("eng", codec="aac"), sub("eng", frames=1000), sub("eng", frames=900))
+    rules = Rules(["eng"], ["eng"], one_audio_per_language=False, one_subtitle_per_language=False)
+    assert decide(media(*tracks), rules).status == plans.CLEAN
+
+
+def test_parse_profile_and_lines():
+    info = parse("/x.mkv", {"format": {}, "streams": [
+        {"index": 0, "codec_type": "audio", "codec_name": "dts", "profile": "DTS-HD MA", "disposition": {"visual_impaired": 1}},
+        {"index": 1, "codec_type": "subtitle", "codec_name": "subrip", "tags": {"NUMBER_OF_FRAMES": "42", "title": "English [CC]"},
+         "disposition": {}},
+    ]})
+    assert info.tracks[0].profile == "DTS-HD MA" and info.tracks[0].visual_impaired
+    assert info.tracks[1].frames == 42 and info.tracks[1].hearing_impaired
+
+
+def test_subtitles_are_left_alone_when_their_length_is_unknown():
+    # No line counts or sizes: a short forced track can't be spotted, so nothing is removed
+    p = decide(media(VIDEO, audio("eng"), sub("eng", codec="hdmv_pgs_subtitle"), sub("eng", codec="subrip")), ENGLISH)
+    assert p.status == plans.CLEAN
+
+
+def test_forced_spotted_by_size_when_lines_are_unknown():
+    p = decide(media(VIDEO, audio("eng"), sub("eng", codec="hdmv_pgs_subtitle", size=30_000_000),
+                     sub("eng", codec="hdmv_pgs_subtitle", size=400_000),
+                     sub("eng", codec="hdmv_pgs_subtitle", size=31_000_000, hearing_impaired=True)), ENGLISH)
+    assert [r["index"] for r in p.remove] == [4]  # the SDH copy; the small forced one stays
+
+
+def test_sizes_of_text_and_picture_subtitles_are_not_compared():
+    # Text is far smaller than pictures, so without line counts the SRT could be mistaken for forced
+    p = decide(media(VIDEO, audio("eng"), sub("eng", codec="hdmv_pgs_subtitle", size=30_000_000),
+                     sub("eng", codec="subrip", size=90_000)), ENGLISH)
+    assert p.status == plans.CLEAN
+
+
+def test_unflagged_forced_subtitles_get_flagged():
+    p = decide(media(VIDEO, audio("eng"), audio("fra"), sub("eng", frames=1200), sub("eng", frames=12)), ENGLISH)
+    assert p.mark_forced == [4]
+    flagged = decide(media(VIDEO, audio("eng"), audio("fra"), sub("eng", frames=1200), sub("eng", frames=12, forced=True)),
+                     ENGLISH)
+    assert flagged.mark_forced == []
