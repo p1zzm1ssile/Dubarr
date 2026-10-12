@@ -10,14 +10,14 @@ import sys
 import threading
 import time
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 def problems():
     found = []
     if config.load_error:
         found.append(config.load_error)
-    for tool in ("ffprobe", "ffmpeg", "mkvmerge"):
+    for tool in ("ffprobe", "ffmpeg", "mkvmerge", "mkvpropedit"):
         if not shutil.which(tool):
             found.append(f"{tool} isn't installed")
     return found

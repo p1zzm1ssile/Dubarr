@@ -8,7 +8,7 @@ import pytest
 import utils.config as config
 from conftest import make_video, needs_tools
 from core import plan as plans
-from core import swap
+from core import swap, tagging
 from core.engine import ERROR, SEEDING, Engine
 from core.probe import probe
 from core.remux import temp_path
@@ -195,3 +195,51 @@ def test_leftover_temp_files_are_cleaned_up(library, engine):
         f.write(b"half a file")
     engine.scan()
     assert not os.path.exists(leftover)
+
+
+@pytest.mark.parametrize("ext", [".mkv", ".mp4"])
+def test_listen_and_tag(library, engine, ext):
+    film = make_video(str(library / f"x{ext}"), audio=("eng", ""), subtitles=("eng", "fre"))
+    engine.scan()
+    assert engine.store.file(film)["status"] == plans.UNKNOWN_AUDIO
+    info = engine.known_file(film)
+
+    sample = tagging.audio_sample(info, 2, seconds=2)
+    assert sample[:3] == b"ID3" or sample[0] == 0xFF  # an MP3
+    lines = tagging.subtitle_lines(info, 3)
+    assert lines == ["hello"]
+    with pytest.raises(tagging.TagError):
+        tagging.audio_sample(info, 0)  # the video isn't an audio track
+
+    inode = os.stat(film).st_ino
+    message = engine.tag(film, {"2": "ita"})
+    assert message == "Tagged audio track 2 as Italian"
+    assert tracks(film, "audio") == ["eng", "ita"]
+    if ext == ".mkv":
+        assert os.stat(film).st_ino == inode  # tagged in place, nothing copied
+    else:
+        assert engine.store.history()[1][0]["message"] == message  # the original MP4 can be restored
+    # Now Dubarr knows what it is, it's an ordinary unwanted track
+    assert engine.store.file(film)["status"] == plans.CHANGE
+    assert engine.tag(film, {"2": "ita"}) == "Nothing to change"
+    with pytest.raises(tagging.TagError):
+        engine.tag(film, {"0": "eng"})
+    with pytest.raises(tagging.TagError):
+        engine.tag(film, {"2": "elvish"})
+
+
+def test_no_tagging_while_seeding(library, engine, tmp_path):
+    film = make_video(str(library / "x.mkv"), audio=("",))
+    os.link(film, tmp_path / "seeding.mkv")
+    engine.scan()
+    with pytest.raises(tagging.TagError, match="seeding"):
+        engine.tag(film, {"1": "eng"})
+    assert tracks(film, "audio") == ["und"]
+
+
+def test_progress_estimate(engine):
+    assert engine.progress() is None
+    with engine.job("Changing files"):
+        engine.activity.update(started=time.time() - 60, bytes_total=400, bytes_done=100, total=4, done=1)
+        p = engine.progress()
+    assert 175 <= p["eta_seconds"] <= 185  # a quarter done in a minute: three more minutes

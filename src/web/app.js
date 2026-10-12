@@ -68,6 +68,14 @@ function until(timestamp) {
   return `in ${Math.round(seconds / 3600)}h`;
 }
 
+function duration(seconds) {
+  if (seconds < 60) return "under a minute";
+  if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.round((seconds % 3600) / 60);
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
 const when = (timestamp) => new Date(timestamp * 1000).toLocaleString();
 
 function splitPath(path) {
@@ -120,7 +128,7 @@ api("/api/session").then((s) => {
 // ---------- Dashboard ----------
 
 const STATUS_STYLE = {
-  change: "info", seeding: "", no_wanted_audio: "warn", unknown_audio: "warn",
+  change: "info", seeding: "", no_wanted_audio: "warn", unknown_audio: "warn", unknown_subtitles: "warn",
   error: "bad", no_audio: "", clean: "ok", ignored: "",
 };
 
@@ -128,7 +136,8 @@ const STATUS_HELP = {
   change: "These have audio or subtitles in languages you don't keep. Apply them here, or turn off Report only in Settings and Dubarr does it by itself.",
   seeding: "Hardlinked files, usually still seeding in your torrent client. Dubarr waits until seeding stops, so the film isn't stored twice.",
   no_wanted_audio: "None of the audio is in a language you keep, so Dubarr leaves these alone. Replace them in Radarr or Sonarr if you want them in your language.",
-  unknown_audio: "At least one audio track has no language tag, so Dubarr can't tell what it is and leaves the file alone. Tag it (MKVToolNix does this without re-encoding), then Re-check.",
+  unknown_audio: "At least one audio track has no language tag, so Dubarr can't tell what it is and leaves the file alone. Press Listen & tag to hear it and set its language; the tag is written into the file, so it won't come back here.",
+  unknown_subtitles: "Nothing to remove, but a subtitle track has no language tag. Press Listen & tag to read a few lines and set its language, so Dubarr knows whether to keep it.",
   error: "Files that couldn't be read or changed. The original is always left as it was.",
   no_audio: "Files with no audio at all.",
   clean: "Only languages you keep. Nothing to do.",
@@ -150,10 +159,91 @@ function trackChips(file) {
   }));
 }
 
+function languageSelect(current) {
+  const options = Object.entries(languages).sort((a, b) => a[1].localeCompare(b[1]));
+  return el("select", { "aria-label": "Language" },
+    current === "und" ? el("option", { value: "und", text: "Unknown, choose…", selected: true }) : null,
+    el("option", { value: "zxx", text: "No speech (music or effects only)", selected: current === "zxx" }),
+    options.map(([code, name]) => el("option", { value: code, text: name, selected: code === current })));
+}
+
+function tagPanel(file, onSaved) {
+  const isMp4 = /\.(mp4|m4v)$/i.test(file.path);
+  const selects = {};
+  const result = el("span", { class: "result", role: "status" });
+  const query = (t) => new URLSearchParams({ path: file.path, index: t.index });
+
+  const rows = file.tracks.map((t) => {
+    const preview = el("div", { class: "tag-preview" });
+    let button;
+    if (t.type === "audio") {
+      button = el("button", { type: "button", text: "Play a 30s sample" });
+      button.addEventListener("click", () => {
+        preview.replaceChildren(el("audio", { controls: true, autoplay: true, preload: "auto", src: `/api/sample?${query(t)}` }),
+          el("div", { class: "help", text: "Taken from about a quarter of the way in. It can take a few seconds to start." }));
+      });
+    } else {
+      button = el("button", { type: "button", text: "Show some lines" });
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        preview.replaceChildren(el("div", { class: "muted small", text: "Reading…" }));
+        try {
+          const { lines } = await api(`/api/subtitle-lines?${query(t)}`);
+          preview.replaceChildren(el("ul", { class: "sub-lines" }, lines.map((l) => el("li", { text: l }))));
+        } catch (e) {
+          preview.replaceChildren(el("div", { class: "error-text", text: e.message }));
+        } finally {
+          button.disabled = false;
+        }
+      });
+    }
+    selects[t.index] = languageSelect(t.language);
+    const details = [t.type === "audio" ? "Audio" : "Subtitles", `track ${t.index}`, t.codec,
+      t.channels ? `${t.channels} ch` : "", t.title ? `“${t.title}”` : "",
+      t.forced ? "forced" : "", t.commentary ? "commentary" : ""].filter(Boolean).join(" · ");
+    return el("div", { class: `tag-track${t.language === "und" ? " untagged" : ""}` },
+      el("div", { class: "tag-head" },
+        el("div", {}, el("strong", { text: details }),
+          el("div", { class: "small muted", text: t.language === "und" ? "No language tag" : `Tagged ${langName(t.language)}` })),
+        el("div", { class: "tag-controls" }, button, selects[t.index])),
+      preview);
+  });
+
+  const save = el("button", { type: "button", class: "primary", text: "Save tags" });
+  save.addEventListener("click", async () => {
+    const tags = {};
+    for (const t of file.tracks) {
+      const value = selects[t.index].value;
+      if (value !== t.language && value !== "und") tags[t.index] = value;
+    }
+    if (!Object.keys(tags).length) { flash(result, false, "Choose a language for at least one track first"); return; }
+    save.disabled = true;
+    result.className = "result muted";
+    result.textContent = isMp4 ? "Writing a tagged copy…" : "Saving…";
+    try {
+      const r = await post("/api/tag", { path: file.path, tags });
+      flash(result, true, r.message);
+      setTimeout(onSaved, 1200);
+    } catch (e) {
+      flash(result, false, e.message);
+    } finally {
+      save.disabled = false;
+    }
+  });
+
+  return el("div", { class: "tag-panel" },
+    el("p", { class: "small muted", text: "Listen to each track or read a few lines, choose its language, and save. "
+      + (isMp4 ? "MP4 files can't be edited in place, so Dubarr writes a tagged copy and keeps the original in the recycle folder."
+        : "The tag is written into the file in a moment, without copying it, so the file won't be flagged again.") }),
+    rows,
+    el("div", { class: "card-actions" }, save, result));
+}
+
 async function showDashboard(selected) {
   let status = selected || "change";
   let shown = [];
   let total = 0;
+  const openPanels = new Set();
 
   const notices = el("div");
   const activity = el("div", { class: "panel" });
@@ -207,13 +297,28 @@ async function showDashboard(selected) {
         b.addEventListener("click", () => act("/api/recheck", { path: f.path }, b));
         actions.push(b);
       }
+      const panel = el("div");
+      const untagged = f.tracks.some((t) => t.language === "und");
+      if (f.tracks.length) {
+        const b = el("button", { type: "button", text: untagged ? "Listen & tag" : "Check tracks",
+          title: "Hear the audio, read the subtitles, and fix their language tags" });
+        const toggle = () => {
+          if (openPanels.has(f.path) && panel.firstChild) { openPanels.delete(f.path); panel.replaceChildren(); return; }
+          openPanels.add(f.path);
+          panel.replaceChildren(tagPanel(f, () => { openPanels.delete(f.path); refresh(); }));
+        };
+        b.addEventListener("click", toggle);
+        actions.push(b);
+        if (openPanels.has(f.path)) panel.replaceChildren(tagPanel(f, () => { openPanels.delete(f.path); refresh(); }));
+      }
       return el("tr", { class: "file-row" },
         el("td", { class: "name" },
           el("div", { class: "title", text: name }),
           el("div", { class: "path mono", text: folder }),
           el("div", { class: "small", text: f.message + (f.saved_bytes ? ` · saves ${bytes(f.saved_bytes)}` : "") }),
-          f.tracks.length ? trackChips(f) : null),
-        el("td", { class: "actions" }, actions));
+          f.tracks.length ? trackChips(f) : null,
+          panel),
+        el("td", { class: "actions" }, el("div", { class: "action-stack" }, actions)));
     });
     table.replaceChildren(el("tbody", {}, rows.length ? rows
       : [el("tr", {}, el("td", { class: "empty", text: search.value ? "Nothing matches your search." : "Nothing here." }))]));
@@ -236,13 +341,16 @@ async function showDashboard(selected) {
   function renderActivity(h) {
     const a = h && h.activity;
     if (a) {
-      const pct = a.total ? Math.min(100, Math.round((a.done / a.total) * 100)) : null;
+      const fraction = a.bytes_total ? a.bytes_done / a.bytes_total : a.total ? a.done / a.total : null;
+      const pct = fraction === null ? null : Math.min(100, Math.round(fraction * 100));
+      const eta = a.eta_seconds !== null && a.eta_seconds !== undefined ? ` · about ${duration(a.eta_seconds)} left` : "";
       const stop = el("button", { type: "button", class: "danger", text: "Stop" });
       stop.addEventListener("click", () => act("/api/stop", {}, stop));
       activity.replaceChildren(
         el("div", { class: "toolbar", style: "margin:0" },
           el("strong", { text: `${a.task}…` }),
-          el("span", { class: "muted small", text: a.total ? `${a.done} of ${a.total}` : `${a.done} file(s) so far` }),
+          el("span", { class: "muted small", text: (a.total ? `${a.done.toLocaleString()} of ${a.total.toLocaleString()}` : a.detail === "Listing files" ? "listing files" : `${a.done} file(s) so far`)
+            + (a.total && pct !== null ? ` (${pct}%)` : "") + (a.done ? eta : "") }),
           el("span", { class: "spacer" }), stop),
         pct !== null ? el("div", { class: "progress" }, el("span", { style: `width:${pct}%` })) : el("div", { class: "progress" }, el("span", { style: "width:100%;opacity:.35" })),
         el("div", { class: "muted small mono", style: "word-break:break-all", text: a.detail || "" }));
@@ -295,7 +403,7 @@ async function showDashboard(selected) {
     listHelp.textContent = STATUS_HELP[status] || "";
     applyAll.hidden = status !== "change" || !current.files;
     applyAll.textContent = `Apply all ${current.files}`;
-    await loadFiles(false);
+    if (!openPanels.size) await loadFiles(false);
   }
 
   applyAll.addEventListener("click", () => {

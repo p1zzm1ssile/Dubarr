@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- **Listen & tag.** Untagged audio and subtitle tracks can now be checked from the Dashboard: play a 30-second sample of an audio track, or read a few lines of a subtitle track, pick the language and save. The tag is written into the file (MKV in place, in a moment; MP4 as a checked copy, with the original in the recycle folder), so the file isn't flagged again. Works on any track, to fix wrong tags too.
+- **Untagged subtitles** get their own Dashboard list, so they can be tagged.
+- **Commentary tracks are removed**, even in your languages. Turn it off in Settings > General. The main audio is never removed.
+- **Time left.** Scans and batches of changes show how far along they are and roughly how long is left.
+
 ## 0.1.0
 
 First release.

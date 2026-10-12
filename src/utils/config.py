@@ -108,6 +108,9 @@ FIELDS = [
       env_bool("STRIP_AUDIO", default=True), section="Languages"),
     F("strip_subtitles", "general", "Remove unwanted subtitles", "bool",
       env_bool("STRIP_SUBTITLES", default=True), section="Languages"),
+    F("strip_commentary", "general", "Remove commentary tracks", "bool",
+      env_bool("STRIP_COMMENTARY", default=True), section="Languages",
+      help="Director's and cast commentaries, even in your languages. The main audio is never removed."),
 
     # General: when
     F("report_only", "general", "Report only, don't change files", "bool",
