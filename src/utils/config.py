@@ -112,6 +112,14 @@ FIELDS = [
       env_bool("STRIP_COMMENTARY", default=True), section="Languages",
       help="Director's and cast commentaries, even in your languages, and the subtitles that go with them. "
            "The main audio is never removed."),
+    F("one_audio_per_language", "general", "Keep only the best audio track per language", "bool",
+      env_bool("ONE_AUDIO_PER_LANGUAGE", default=True), section="Languages",
+      help="e.g. keeps Dolby Atmos and removes the extra 5.1 and stereo copies. Jellyfin converts the audio on the fly "
+           "for devices that can't play it, without touching the video. Audio description tracks are never picked."),
+    F("one_subtitle_per_language", "general", "Keep only one subtitle track per language, plus forced", "bool",
+      env_bool("ONE_SUBTITLE_PER_LANGUAGE", default=True), section="Languages",
+      help="Text subtitles (SRT) are kept over picture ones (PGS), since Jellyfin can show text without transcoding "
+           "the video, and normal over SDH. Forced subtitles, which translate foreign-language scenes, are kept too."),
 
     # General: when
     F("report_only", "general", "Report only, don't change files", "bool",

@@ -121,7 +121,7 @@ class Engine:
 
     def rules(self, library):
         return Rules(library["audio"], library["subtitles"], config.strip_audio, config.strip_subtitles,
-                     config.strip_commentary)
+                     config.strip_commentary, config.one_audio_per_language, config.one_subtitle_per_language)
 
     def _walk(self, library):
         recycle = config.recycle_folder

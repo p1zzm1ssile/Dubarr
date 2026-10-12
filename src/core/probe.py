@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from utils.languages import normalise
 
 # Raise when probe() starts recording something new, so cached results are read again
-PROBE_VERSION = 2
+PROBE_VERSION = 3
 
 TYPES = {"video": "video", "audio": "audio", "subtitle": "subtitle"}
 
@@ -26,6 +26,9 @@ class Track:
     commentary: bool = False
     channels: int = 0
     size: int = 0       # bytes, when the file records it (mkvmerge writes this for every track)
+    profile: str = ""   # e.g. "DTS-HD MA", or Atmos on Dolby Digital Plus
+    frames: int = 0     # for subtitles, roughly the number of lines
+    visual_impaired: bool = False  # audio description for the blind
 
     def to_dict(self):
         return asdict(self)
@@ -94,10 +97,15 @@ def parse(path: str, data: dict) -> MediaInfo:
             title=title,
             default=bool(disposition.get("default")),
             forced=bool(disposition.get("forced")) or "forced" in title.lower(),
-            hearing_impaired=bool(disposition.get("hearing_impaired")) or "sdh" in title.lower().split(),
+            hearing_impaired=bool(disposition.get("hearing_impaired"))
+            or any(word in title.lower() for word in ("sdh", "[cc]", "hearing impaired")),
             commentary=bool(disposition.get("comment")) or "commentary" in title.lower(),
             channels=_int(s.get("channels")),
             size=_int(tags.get("number_of_bytes") or tags.get("number_of_bytes-eng")) or _estimate(s, tags),
+            profile=s.get("profile") or "",
+            frames=_int(tags.get("number_of_frames") or tags.get("number_of_frames-eng") or s.get("nb_frames")),
+            visual_impaired=bool(disposition.get("visual_impaired"))
+            or any(word in title.lower() for word in ("audio description", "descriptive")),
         ))
     try:
         duration = float(fmt.get("duration") or 0)

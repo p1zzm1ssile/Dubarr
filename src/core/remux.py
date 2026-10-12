@@ -75,6 +75,8 @@ def mkvmerge_command(source: str, target: str, info: MediaInfo, plan: Plan) -> l
     if plan.default_audio is not None:
         for index in audio:
             command += ["--default-track-flag", f"{index}:{1 if index == plan.default_audio else 0}"]
+    for index in plan.mark_forced:
+        command += ["--forced-display-flag", f"{index}:1"]
     return command + [source]
 
 
@@ -88,6 +90,10 @@ def ffmpeg_command(source: str, target: str, info: MediaInfo, plan: Plan) -> lis
         kept_audio = [t.index for t in info.of("audio") if t.index not in removed]
         for position, index in enumerate(kept_audio):
             command += [f"-disposition:a:{position}", "default" if index == plan.default_audio else "0"]
+    kept_subs = [t.index for t in info.of("subtitle") if t.index not in removed]
+    for position, index in enumerate(kept_subs):
+        if index in plan.mark_forced:
+            command += [f"-disposition:s:{position}", "+forced"]
     command += ["-movflags", "+faststart", "-f", "mp4"]
     return command + [target]
 
