@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<Maintainer>
+  <Icon>https://raw.githubusercontent.com/p1zzm1ssile/Dubarr/main/src/web/icon.png</Icon>
+  <Profile>p1zzm1ssile makes tools that keep an Unraid media server tidy and running smoothly alongside Radarr, Sonarr and Jellyfin.
+
+Dubarr removes audio and subtitle tracks in languages you don't want, keeps the best track in the ones you do, and flags files with no audio in your language. It starts in report-only mode, keeps every original in a recycle folder with one-click restore, and waits for torrents to finish seeding.
+
+Everything is set up in a web UI. Bug reports and ideas are welcome on GitHub.</Profile>
+  <WebPage>https://github.com/p1zzm1ssile/Dubarr</WebPage>
+</Maintainer>
