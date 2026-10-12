@@ -266,6 +266,11 @@ class Engine:
         """Decide what to do with a file and record it. Returns its status."""
         try:
             status, message, plan, info, st = self.evaluate(library, path, reread)
+        except FileNotFoundError:
+            # Deleted or renamed since the last scan: drop it from the lists
+            if self.store.forget(path):
+                logger.info(f"{path} no longer exists, so it was taken off the lists")
+            return None
         except OSError as e:
             logger.warning(f"Can't read {path}: {e.strerror or e}")
             return None
