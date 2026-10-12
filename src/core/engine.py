@@ -23,6 +23,7 @@ from utils.paths import inside
 
 # Statuses Dubarr adds on top of the plan's
 SEEDING = "seeding"   # would change, but it's hardlinked and probably still seeding
+TOO_SMALL = "too_small"  # would change, but would save less than the minimum set
 ERROR = "error"       # couldn't be read or changed
 
 APPLY_EVERY_SECONDS = 600
@@ -30,6 +31,14 @@ APPLY_EVERY_SECONDS = 600
 
 class Busy(Exception):
     pass
+
+
+def estimated_saving(plan):
+    """Bytes a change would save, or None if it can't be told. Subtitle tracks without a recorded size are
+    tiny next to the film, but an audio track of unknown size could be gigabytes."""
+    if any(r["type"] == "audio" and not r["size"] for r in plan.remove):
+        return None
+    return plan.saved_bytes
 
 
 def in_window(start: int, end: int, now: datetime.datetime = None) -> bool:
@@ -121,7 +130,8 @@ class Engine:
 
     def rules(self, library):
         return Rules(library["audio"], library["subtitles"], config.strip_audio, config.strip_subtitles,
-                     config.strip_commentary, config.one_audio_per_language, config.one_subtitle_per_language)
+                     config.strip_commentary, config.one_audio_per_language, config.one_subtitle_per_language,
+                     config.assume_unlabelled_is_full)
 
     def _walk(self, library):
         recycle = config.recycle_folder
@@ -169,7 +179,11 @@ class Engine:
 
         plan = decide(info, self.rules(library))
         status, message = plan.status, plan.message
-        if plan.changes and st.st_nlink > 1 and not config.process_hardlinked:
+        saving = estimated_saving(plan)
+        minimum = config.min_saving_mb * 1024 * 1024
+        if plan.changes and minimum and saving is not None and saving < minimum:
+            status, message = TOO_SMALL, f"{plan.message}. Saves less than the {size(minimum)} set, so it's left for now"
+        elif plan.changes and st.st_nlink > 1 and not config.process_hardlinked:
             status, message = SEEDING, f"{plan.message}. Waiting: the file is hardlinked, probably still seeding"
         self.store.save_file(path, library["path"], st.st_size, st.st_mtime, st.st_nlink, info.to_dict(),
                              status, message, plan.to_dict(), plan.saved_bytes)
@@ -236,6 +250,8 @@ class Engine:
         with self.job("Changing files", wait=wait):
             self.last_apply = time.time()
             statuses = [plans.CHANGE] + ([SEEDING] if config.process_hardlinked else [])
+            if paths and force:
+                statuses.append(TOO_SMALL)  # chosen by hand, so worth it
             if paths:
                 rows = [r for r in (self.store.file(p) for p in paths) if r and r["status"] in statuses and not r["ignored"]]
             else:
@@ -258,7 +274,7 @@ class Engine:
                     logger.info("Outside the hours set for changing files. The rest will wait")
                     break
                 self.activity["detail"] = row["path"]
-                result = self.change_file(run_id, row["path"])
+                result = self.change_file(run_id, row["path"], allow_small=bool(paths and force))
                 self.activity["done"] += 1
                 self.activity["bytes_done"] += row["size"]
                 if result is None:
@@ -274,7 +290,7 @@ class Engine:
                            + (f". {failed} couldn't be changed, see the Dashboard" if failed else ""))
             self.purge()
 
-    def change_file(self, run_id, path):
+    def change_file(self, run_id, path, allow_small=False):
         """Strip one file. Returns bytes saved, False on failure, or None if there was nothing to do."""
         library = self.library_for(path)
         if not library:
@@ -282,7 +298,8 @@ class Engine:
         # Read the file again right before changing it, in case it changed since the scan
         status = self.check_file(library, path, reread=True)
         row = self.store.file(path)
-        if status != plans.CHANGE and not (status == SEEDING and config.process_hardlinked):
+        if not (status == plans.CHANGE or (status == SEEDING and config.process_hardlinked)
+                or (status == TOO_SMALL and allow_small)):
             return None
 
         info = MediaInfo.from_dict(row["info"])

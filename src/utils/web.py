@@ -17,7 +17,7 @@ import utils.auth as auth
 import utils.config as config
 import utils.status as status
 from core import plan as plans
-from core.engine import ERROR, SEEDING, Busy, in_window
+from core.engine import ERROR, SEEDING, TOO_SMALL, Busy, in_window
 from core.swap import SwapError
 from core.tagging import TagError, audio_sample, subtitle_lines
 from services.connections import Arr, Jellyfin, ServiceError, webhook_paths
@@ -47,6 +47,7 @@ SECURITY_HEADERS = {
 STATUSES = {
     plans.CHANGE: "Will be changed",
     SEEDING: "Waiting for seeding to stop",
+    TOO_SMALL: "Not worth rewriting",
     plans.NO_WANTED_AUDIO: "No wanted audio",
     plans.UNKNOWN_AUDIO: "Untagged audio",
     plans.UNKNOWN_SUBTITLES: "Untagged subtitles",
@@ -280,7 +281,8 @@ class Handler(BaseHTTPRequestHandler):
                 logger.info(f"Settings saved ({', '.join(sorted(changes.keys()))})")
                 # New languages or libraries change what's wanted: re-check (quick, nothing is re-read)
                 if {"audio_languages", "subtitle_languages", "strip_audio", "strip_subtitles", "strip_commentary",
-                        "one_audio_per_language", "one_subtitle_per_language",
+                        "one_audio_per_language", "one_subtitle_per_language", "assume_unlabelled_is_full",
+                        "min_saving_mb",
                         "libraries", "process_hardlinked"} & changes.keys():
                     engine.background(engine.scan, "settings", wait=True)
                 return self.send(200, {"ok": True, "values": config.public_values()})

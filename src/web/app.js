@@ -128,7 +128,7 @@ api("/api/session").then((s) => {
 // ---------- Dashboard ----------
 
 const STATUS_STYLE = {
-  change: "info", seeding: "", no_wanted_audio: "warn", unknown_audio: "warn", unknown_subtitles: "warn",
+  change: "info", seeding: "", no_wanted_audio: "warn", unknown_audio: "warn", unknown_subtitles: "warn", too_small: "",
   error: "bad", no_audio: "", clean: "ok", ignored: "",
 };
 
@@ -141,6 +141,7 @@ const STATUS_HELP = {
   error: "Files that couldn't be read or changed. The original is always left as it was.",
   no_audio: "Files with no audio at all.",
   clean: "Only languages you keep. Nothing to do.",
+  too_small: "These would save less than the minimum set in Settings, and rewriting a whole film for a few KB isn't worth the wear on the array. Apply one by hand if you want it anyway, or lower the setting.",
   ignored: "Files you restored. Dubarr leaves them alone until you say otherwise.",
 };
 
@@ -305,7 +306,7 @@ async function showDashboard(selected) {
     const rows = shown.map((f) => {
       const [folder, name] = splitPath(f.path);
       const actions = [];
-      if (f.status === "change" && !f.ignored) {
+      if ((f.status === "change" || f.status === "too_small") && !f.ignored) {
         const b = el("button", { type: "button", text: "Apply" });
         b.addEventListener("click", () => act("/api/apply", { paths: [f.path] }, b));
         actions.push(b);
@@ -314,7 +315,7 @@ async function showDashboard(selected) {
         const b = el("button", { type: "button", text: "Stop leaving alone", title: "Dubarr will deal with it again, like any other file" });
         b.addEventListener("click", () => act("/api/ignore", { path: f.path, ignored: false }, b, () => {}));
         actions.push(b);
-      } else if (f.status !== "change" && f.status !== "clean") {
+      } else if (!["change", "clean", "too_small"].includes(f.status)) {
         const b = el("button", { type: "button", text: "Re-check", title: "Read the file again" });
         b.addEventListener("click", () => act("/api/recheck", { path: f.path }, b));
         actions.push(b);
@@ -643,6 +644,26 @@ function fieldInput(field, value, onChange) {
   }
 
   if (field.type === "libraries") return librariesInput(field, value, onChange, help, error);
+
+  if (field.type === "slider") {
+    const label = (v) => (!v ? "Off (change every file)" : v >= 1000 ? `${v / 1000} GB` : `${v} MB`);
+    const start = Math.max(0, field.options.indexOf(value));
+    const shown = el("strong", { text: label(field.options[start]) });
+    const input = el("input", { type: "range", id, min: 0, max: field.options.length - 1, step: 1, value: start,
+      "aria-valuetext": label(field.options[start]) });
+    input.addEventListener("input", () => {
+      const v = field.options[Number(input.value)];
+      shown.textContent = label(v);
+      input.setAttribute("aria-valuetext", label(v));
+      onChange();
+    });
+    return {
+      node: el("label", { class: "field", for: id },
+        el("span", { class: "label" }, `${field.label}: `, shown), input, help, error),
+      get: () => field.options[Number(input.value)],
+      input,
+    };
+  }
 
   let input;
   if (field.type === "select") {

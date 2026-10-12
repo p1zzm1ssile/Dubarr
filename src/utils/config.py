@@ -116,6 +116,11 @@ FIELDS = [
       env_bool("ONE_AUDIO_PER_LANGUAGE", default=True), section="Languages",
       help="e.g. keeps Dolby Atmos and removes the extra 5.1 and stereo copies. Jellyfin converts the audio on the fly "
            "for devices that can't play it, without touching the video. Audio description tracks are never picked."),
+    F("assume_unlabelled_is_full", "general", "Trust SDH labels when subtitle lengths aren't recorded", "bool",
+      env_bool("ASSUME_UNLABELLED_IS_FULL", default=False), section="Languages",
+      help="Some files don't record how long each subtitle track is, so a short forced track can't be told from a full one "
+           "and every track is kept. On: when one track is labelled SDH, the unlabelled one is taken to be the full "
+           "subtitles and the SDH copy is removed. Usually right, but it's a guess."),
     F("one_subtitle_per_language", "general", "Keep only one subtitle track per language, plus forced", "bool",
       env_bool("ONE_SUBTITLE_PER_LANGUAGE", default=True), section="Languages",
       help="Text subtitles (SRT) are kept over picture ones (PGS), since Jellyfin can show text without transcoding "
@@ -138,6 +143,11 @@ FIELDS = [
     F("max_changes_per_pass", "general", "Most files changed at a time", "int",
       env_int("MAX_CHANGES_PER_PASS", default=25), section="Changing files", min=1, max=10000,
       help="Dubarr changes this many, then waits 10 minutes before the next batch."),
+    F("min_saving_mb", "general", "Skip files that would save less than", "slider",
+      env_int("MIN_SAVING_MB", default=0), section="Changing files",
+      options=[0, 10, 25, 50, 100, 250, 500, 1000, 2000, 5000],
+      help="Removing any track means rewriting the whole file, which on a 4K film can be 60 GB of writing to save a few KB "
+           "of subtitles. Files that would save less are listed under \"Not worth rewriting\" and can still be applied by hand."),
     F("process_hardlinked", "general", "Change files that are still seeding", "bool",
       env_bool("PROCESS_HARDLINKED", default=False), section="Changing files",
       help="A hardlinked file is usually still seeding in your torrent client. Changing it breaks the link, "
@@ -284,6 +294,14 @@ def coerce(field, value):
         if "max" in field and number > field["max"]:
             raise ValueError(f"must be at most {field['max']}")
         return number
+    if t == "slider":
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("must be a number")
+        if value not in field["options"]:
+            raise ValueError(f"must be one of {', '.join(map(str, field['options']))}")
+        return value
     if t == "select":
         if value not in field["options"]:
             raise ValueError(f"must be one of {', '.join(field['options'])}")

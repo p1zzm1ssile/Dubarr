@@ -258,3 +258,16 @@ def test_unflagged_forced_subtitles_get_flagged():
     flagged = decide(media(VIDEO, audio("eng"), audio("fra"), sub("eng", frames=1200), sub("eng", frames=12, forced=True)),
                      ENGLISH)
     assert flagged.mark_forced == []
+
+
+def test_trusting_sdh_labels_when_lengths_are_unknown():
+    tracks = (VIDEO, audio("eng"), sub("eng", codec="subrip"), sub("eng", codec="subrip", hearing_impaired=True),
+              sub("eng", codec="subrip", forced=True))
+    assert decide(media(*tracks), ENGLISH).status == plans.CLEAN  # off: can't tell, so everything stays
+    trusting = Rules(["eng"], ["eng"], assume_unlabelled_is_full=True)
+    p = decide(media(*tracks), trusting)
+    assert [r["index"] for r in p.remove] == [3]  # the SDH copy; the full and the flagged forced one stay
+    # Nothing labelled SDH (or everything is): no basis for a guess
+    assert decide(media(VIDEO, audio("eng"), sub("eng"), sub("eng")), trusting).status == plans.CLEAN
+    assert decide(media(VIDEO, audio("eng"), sub("eng", hearing_impaired=True), sub("eng", hearing_impaired=True)),
+                  trusting).status == plans.CLEAN
