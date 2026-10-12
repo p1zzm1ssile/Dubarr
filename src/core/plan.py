@@ -6,8 +6,9 @@ The rules:
   * If no audio is in a wanted language, change nothing and warn.
   * If any audio track has no language tag, change nothing and warn:
     there's no way to know it isn't the one you want.
-  * Commentary tracks are removed too, unless that's turned off. The last
-    non-commentary audio in a wanted language is never removed.
+  * Commentary tracks are removed too, unless that's turned off: commentary
+    audio and the subtitles of the commentary. The last non-commentary audio
+    in a wanted language is never removed.
   * Keep subtitles in a wanted language, including forced ones. Remove the rest.
     Subtitles with no language tag are always kept, and flagged so they can be tagged.
 """
@@ -112,6 +113,13 @@ def decide(info: MediaInfo, rules: Rules) -> Plan:
                 continue
             remove.append(_removal(t, "Unwanted subtitle language"))
 
+    # Subtitles of a commentary are no use once the commentary is gone
+    if rules.strip_commentary:
+        removing = {r["index"] for r in remove}
+        for t in subtitles:
+            if t.commentary and t.index not in removing:
+                remove.append(_removal(t, "Commentary subtitles"))
+
     untagged_subs = [t for t in subtitles if t.language == UNDEFINED]
     if not remove:
         if untagged_subs:
@@ -135,13 +143,16 @@ def decide(info: MediaInfo, rules: Rules) -> Plan:
         default_audio = best.index
 
     removed_audio = _languages([t for t in audio if t.index in removed and not t.commentary])
-    removed_subs = _languages([t for t in subtitles if t.index in removed])
+    removed_subs = _languages([t for t in subtitles if t.index in removed and not t.commentary])
     commentaries = sum(1 for t in audio if t.index in removed and t.commentary)
+    commentary_subs = sum(1 for t in subtitles if t.index in removed and t.commentary)
     parts = []
     if removed_audio:
         parts.append(f"{describe(removed_audio)} audio")
     if commentaries:
         parts.append(f"{commentaries} commentary track{'s' if commentaries > 1 else ''}")
+    if commentary_subs:
+        parts.append(f"{commentary_subs} commentary subtitle track{'s' if commentary_subs > 1 else ''}")
     if removed_subs:
         parts.append(f"{describe(removed_subs)} subtitles")
     text = ", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1 else parts[0]

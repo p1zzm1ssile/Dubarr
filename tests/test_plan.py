@@ -162,3 +162,12 @@ def test_untagged_subtitles_are_flagged_when_nothing_else_to_do():
     assert p.status == plans.UNKNOWN_SUBTITLES
     assert p.message.startswith("2 subtitle tracks have no language tag")
     assert not p.remove
+
+
+def test_commentary_subtitles_go_with_the_commentary():
+    p = decide(media(VIDEO, audio("eng"), audio("eng", commentary=True), sub("eng"), sub("eng", commentary=True),
+                     sub("eng", title="Commentary by the director", commentary=True)), ENGLISH)
+    assert sorted(r["index"] for r in p.remove) == [2, 4, 5]
+    assert p.message == "Remove 1 commentary track and 2 commentary subtitle tracks"
+    kept = decide(media(VIDEO, audio("eng"), sub("eng", commentary=True)), Rules(["eng"], ["eng"], strip_commentary=False))
+    assert kept.status == plans.CLEAN
