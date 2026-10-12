@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+- **Skip files that would save less than…** A slider in Settings > General (off, or 10 MB up to 5 GB). Removing any track means rewriting the whole file, so a 4K film could be rewritten to save a few KB of subtitles. Files below the amount go to a "Not worth rewriting" list, where they can still be applied one at a time. Off by default.
+- **Trust SDH labels when subtitle lengths aren't recorded.** Some files don't say how long each subtitle track is, so Dubarr can't tell a short forced track from a full one and keeps every track. With this on, when one track is labelled SDH, the unlabelled one is taken to be the full subtitles and the SDH copy is removed. Off by default.
+
 ## 0.3.0
 
 - **One audio track per language.** Keeps the best-quality track in each language you keep (e.g. Dolby Atmos over the extra 5.1 and stereo copies) and removes the rest. Jellyfin converts audio on the fly for devices that can't play it, without touching the video. Audio description tracks are never picked.

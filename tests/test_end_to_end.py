@@ -259,3 +259,30 @@ def test_duplicates_removed_and_forced_flagged(library, engine, ext, tmp_path):
     new = remux(info, p)
     assert [t.forced for t in new.of("subtitle")] == [False, True]
     assert len(new.of("audio")) == 1
+
+
+def test_minimum_saving(library, engine, monkeypatch):
+    from core.engine import TOO_SMALL, estimated_saving
+    film = make_video(str(library / "x.mkv"), audio=("eng", "ita"))
+    monkeypatch.setattr(config, "report_only", False)
+    monkeypatch.setattr(config, "min_saving_mb", 10)
+    engine.scan()
+    row = engine.store.file(film)
+    assert row["status"] == TOO_SMALL
+    assert "less than the 10.0 MB set" in row["message"]
+    engine.apply("scheduled")
+    engine.apply("manual", force=True)  # "Apply all" leaves them too
+    assert tracks(film, "audio") == ["eng", "ita"]
+    engine.apply("manual", paths=[film], force=True)  # chosen by hand
+    assert tracks(film, "audio") == ["eng"]
+
+    # An audio track of unknown size could be huge, so it isn't skipped
+    plan = type("P", (), {"remove": [{"type": "audio", "size": 0}], "saved_bytes": 0})
+    assert estimated_saving(plan) is None
+
+
+def test_slider_setting():
+    field = config.FIELDS_BY_KEY["min_saving_mb"]
+    assert config.coerce(field, "50") == 50
+    with pytest.raises(ValueError):
+        config.coerce(field, 51)

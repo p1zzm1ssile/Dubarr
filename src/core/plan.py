@@ -45,6 +45,7 @@ class Rules:
     strip_commentary: bool = True
     one_audio_per_language: bool = True
     one_subtitle_per_language: bool = True
+    assume_unlabelled_is_full: bool = False
 
 
 @dataclass
@@ -148,11 +149,16 @@ def _duplicates(tracks, languages, removing, pick):
     return extra
 
 
-def _subtitles_to_keep(same):
-    # Without line counts or sizes an unflagged forced track can't be told apart, so keep everything
+def _subtitles_to_keep(same, assume_unlabelled_is_full=False):
     if _length(same[0], same) is None:
-        return same
-    forced = [t for t in same if likely_forced(t, same)]
+        # Without line counts or sizes an unflagged forced track can't be told apart, so keep everything,
+        # unless you've chosen to trust the labels: next to an SDH track, an unlabelled one is the full subtitles
+        labelled_sdh = [t for t in same if t.hearing_impaired]
+        if not (assume_unlabelled_is_full and labelled_sdh and len(labelled_sdh) < len(same)):
+            return same
+        forced = [t for t in same if t.forced]
+    else:
+        forced = [t for t in same if likely_forced(t, same)]
     full = [t for t in same if t not in forced]
     keep = [min(full, key=subtitle_rank)] if full else []
     if forced:
@@ -216,7 +222,8 @@ def decide(info: MediaInfo, rules: Rules) -> Plan:
             remove.append(_removal(t, "Duplicate audio"))
     if rules.one_subtitle_per_language:
         removing = {r["index"] for r in remove}
-        for t in _duplicates(subtitles, rules.subtitle_languages, removing, _subtitles_to_keep):
+        pick = lambda same: _subtitles_to_keep(same, rules.assume_unlabelled_is_full)
+        for t in _duplicates(subtitles, rules.subtitle_languages, removing, pick):
             remove.append(_removal(t, "Duplicate subtitles"))
 
     untagged_subs = [t for t in subtitles if t.language == UNDEFINED]

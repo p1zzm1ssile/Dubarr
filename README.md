@@ -83,3 +83,7 @@ cd src && CONFIG_DIR=../config LIBRARIES=/path/to/test/library python main.py
 ## Contact
 
 Bugs and ideas: [open an issue](https://github.com/p1zzm1ssile/Dubarr/issues/new?title=%5BDubarr%5D%20). For anything private, email [p1zzm1ssilerepo@gmail.com](mailto:p1zzm1ssilerepo@gmail.com?subject=Dubarr). Both are also on the Contact page in the web UI.
+
+## Licence
+
+[MIT](LICENSE). The Docker image also contains ffmpeg and MKVToolNix, which come under their own licences.
