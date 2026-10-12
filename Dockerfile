@@ -3,6 +3,7 @@ FROM alpine:latest
 
 LABEL author="p1zzm1ssile"
 LABEL org.opencontainers.image.source="https://github.com/p1zzm1ssile/Dubarr"
+LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.description='Dubarr: removes audio and subtitle tracks in languages you do not want from your movies and TV, and flags files with none in your language. Works with Radarr, Sonarr and Jellyfin.'
 
 WORKDIR /app
