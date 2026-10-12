@@ -1,0 +1,82 @@
+name: Test, build and publish Docker image
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/p1zzm1ssile/dubarr
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ffmpeg and MKVToolNix
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg mkvtoolnix
+      - name: Install Python packages
+        run: pip install -r src/requirements.txt pytest
+      - name: Run tests (real MKV and MP4 files through scan, change, restore)
+        run: python -m pytest -q tests
+
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        run: echo "version=$(awk -F\" '/__version__/ {print $2}' src/main.py | head -n1)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: dubarr:test
+
+      - name: Check the image starts and the web UI answers
+        run: |
+          docker run --rm dubarr:test sh -c "ffprobe -version | head -1 && mkvmerge --version && python3 -c 'import core.engine, utils.web, healthcheck; print(\"Dubarr loads\")'"
+          docker run -d --name smoke -p 9892:9892 dubarr:test
+          for i in $(seq 30); do curl -sf -o /dev/null http://localhost:9892/login && break || sleep 1; done
+          # A fresh install sends you to create an account, and the API needs a login
+          curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" http://localhost:9892/ | tee /tmp/root
+          grep -q "302 http://localhost:9892/setup" /tmp/root
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:9892/api/settings)" = "401"
+          # The webhook refuses a wrong token
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d '{}' 'http://localhost:9892/api/webhook?token=nope')" = "403"
+          docker logs smoke
+          docker rm -f smoke
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
