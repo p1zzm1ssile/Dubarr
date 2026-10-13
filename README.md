@@ -93,11 +93,11 @@ Bugs and ideas: [open an issue](https://github.com/p1zzm1ssile/Dubarr/issues/new
 
 ## Free forever
 
-Every feature in Dubarr is free and always will be. There are no paid tiers, no Pro account, no subscriptions, no telemetry and nothing that phones home, and new features will be free too. Services Dubarr works with, like Radarr, Sonarr, Bazarr and Jellyfin, have their own terms.
+Every feature in Dubarr is free and always will be. There are no paid tiers, no Pro account, no subscriptions and no telemetry, and new features will be free too. Services Dubarr works with, like Radarr, Sonarr, Bazarr and Jellyfin, have their own terms.
 
 ## About the developer
 
-I'm an ISO 27001 auditor with combined-type ADHD, dyslexia and dyscalculia. I can read code and follow its logic and security well, but writing it out myself isn't possible. So I design what Dubarr does and how it works, and use AI as an assistive tool to write the code from that design. I review and test every change before it's released.
+I'm an ISO 27001 Lead Auditor with combined-type ADHD, dyslexia and dyscalculia. I can read code and follow its logic and security well, but writing it out myself isn't possible. So I design what Dubarr does and how it works, and use AI as an assistive tool to write the code from that design. I review and test every change before it's released.
 
 ## Licence
 
