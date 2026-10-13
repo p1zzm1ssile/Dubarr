@@ -231,6 +231,28 @@ FIELDS = [
            "is asked to search for them."),
 ]
 
+def with_scheme(url):
+    """"192.168.1.10:8989" -> "http://192.168.1.10:8989", for addresses saved before http:// was needed."""
+    url = str(url or "").strip()
+    return url if not url or url.lower().startswith(("http://", "https://")) else "http://" + url
+
+
+# Addresses start empty, with an example, and need http:// or https://. A localhost default
+# is only a placeholder: inside a container, localhost is the container itself.
+for _field in FIELDS:
+    if _field["key"].endswith("_url") and _field["type"] == "text":
+        _default = str(_field["default"] or "")
+        if _default.startswith("localhost:"):
+            _field["placeholder"] = "http://192.168.1.10:" + _default.split(":", 1)[1]
+            _field["default"] = ""
+        else:
+            _field["placeholder"] = "http://192.168.1.10"
+            _field["default"] = with_scheme(_default)
+        _extra = _field["help"] if _field["help"] and "e.g. 192.168" not in _field["help"] else ""
+        _field["help"] = (f"The full address, starting with http:// or https://, e.g. {_field['placeholder']}. "
+                          "Use your server's IP rather than localhost, which inside a container is the container itself."
+                          + (f" {_extra}" if _extra else ""))
+
 FIELDS_BY_KEY = {f["key"]: f for f in FIELDS}
 SECRET_KEYS = {f["key"] for f in FIELDS if f["type"] == "secret"}
 
@@ -342,6 +364,8 @@ def coerce(field, value):
         raise ValueError("is too long")
     if t == "text" and field["key"].endswith("_url") and any(c in value for c in " <>\"'"):
         raise ValueError("isn't a valid address")
+    if t == "text" and field["key"].endswith("_url") and value and not value.lower().startswith(("http://", "https://")):
+        raise ValueError("must start with http:// or https://")
     if t == "languages":
         codes = languages.parse_list(value)
         if not codes:
@@ -428,6 +452,8 @@ def load():
         merged = {f["key"]: f["default"] for f in FIELDS}
         for key, value in saved.items():
             if key in FIELDS_BY_KEY:
+                if key.endswith("_url") and isinstance(value, str):
+                    value = with_scheme(value)  # saved before http:// was needed
                 try:
                     merged[key] = coerce(FIELDS_BY_KEY[key], value)
                 except ValueError:
