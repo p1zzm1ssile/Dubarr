@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2
+
+- **Addresses start with http://.** Radarr, Sonarr, Bazarr and Jellyfin addresses start empty on a new install, with an example such as `http://192.168.1.10:7878`, instead of `localhost`, which inside a container is the container itself. Addresses must start with `http://` or `https://`; ones saved before this get `http://` added by themselves, so nothing needs re-entering.
+- **No folder mappings filled in on install.** The Unraid template's Movies and TV folders start empty, so you map your own.
+
 ## 0.4.1
 
 - **Re-check removes deleted files.** Pressing Re-check on a file that has since been deleted or renamed now takes it off the Dashboard, rather than leaving it there until the next full scan.

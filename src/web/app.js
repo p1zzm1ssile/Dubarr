@@ -689,7 +689,7 @@ function fieldInput(field, value, onChange) {
     input = el("input", { type: "text", id, value: codesToNames(value), oninput: onChange, placeholder: "e.g. English, Japanese" });
   } else {
     input = el("input", { type: field.type === "int" ? "number" : "text", id, value: value ?? "", oninput: onChange,
-      min: field.min, max: field.max, spellcheck: "false" });
+      min: field.min, max: field.max, placeholder: field.placeholder, spellcheck: "false" });
   }
   return {
     node: el("label", { class: "field", for: id }, el("span", { class: "label", text: field.label }), input, help, error),
