@@ -51,6 +51,7 @@ STATUSES = {
     plans.NO_WANTED_AUDIO: "No wanted audio",
     plans.UNKNOWN_AUDIO: "Untagged audio",
     plans.UNKNOWN_SUBTITLES: "Untagged subtitles",
+    plans.UNKNOWN_ORIGINAL: "Original language unknown",
     ERROR: "Problems",
     plans.NO_AUDIO: "No audio",
     plans.CLEAN: "Already clean",
@@ -286,7 +287,7 @@ class Handler(BaseHTTPRequestHandler):
                 # New languages or libraries change what's wanted: re-check (quick, nothing is re-read)
                 if {"audio_languages", "subtitle_languages", "strip_audio", "strip_subtitles", "strip_commentary",
                         "one_audio_per_language", "one_subtitle_per_language", "assume_unlabelled_is_full",
-                        "min_saving_mb", "strip_subtitle_files", "prefer_text_files",
+                        "min_saving_mb", "strip_subtitle_files", "prefer_text_files", "keep_original_audio",
                         "libraries", "process_hardlinked"} & changes.keys():
                     engine.background(engine.scan, "settings", wait=True)
                 return self.send(200, {"ok": True, "values": config.public_values()})

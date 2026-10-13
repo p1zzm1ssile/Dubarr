@@ -137,6 +137,7 @@ class Engine:
         self.last_apply = 0.0
         self.last_purge = 0.0
         self._services = {}
+        self._unreachable = {}  # Radarr or Sonarr: when to try asking for original languages again
 
     # Jobs
 
@@ -197,10 +198,31 @@ class Engine:
         matches = [lib for lib in config.library_list if inside(path, lib["path"])]
         return max(matches, key=lambda lib: len(lib["path"])) if matches else None
 
-    def rules(self, library):
+    def rules(self, library, path=None):
         return Rules(library["audio"], library["subtitles"], config.strip_audio, config.strip_subtitles,
                      config.strip_commentary, config.one_audio_per_language, config.one_subtitle_per_language,
-                     config.assume_unlabelled_is_full, config.strip_subtitle_files, config.prefer_text_files)
+                     config.assume_unlabelled_is_full, config.strip_subtitle_files, config.prefer_text_files,
+                     config.keep_original_audio, self.original_language(path) if path else None)
+
+    def original_language(self, path):
+        """The original language of a file's film or series, from Radarr or Sonarr. None if neither knows,
+        or the setting is off. If one can't be reached it isn't asked again for 10 minutes, so a scan
+        doesn't wait on it for every file."""
+        if not config.keep_original_audio:
+            return None
+        for kind in ("radarr", "sonarr"):
+            arr = self._service(kind)
+            if not arr or time.time() < self._unreachable.get(kind, 0):
+                continue
+            try:
+                code = arr.original_language(path)
+            except ServiceError as e:
+                logger.warning(f"Couldn't ask {arr.name} for original languages: {e}. Trying again in 10 minutes")
+                self._unreachable[kind] = time.time() + 600
+                continue
+            if code:
+                return code
+        return None
 
     def _walk(self, library):
         recycle = config.recycle_folder
@@ -242,7 +264,7 @@ class Engine:
         # Subtitle files come and go without the video changing, so they're always looked at afresh
         info.external = find_sidecars(path)
 
-        rules = self.rules(library)
+        rules = self.rules(library, path)
         plan = decide(info, rules)
         status, message = plan.status, plan.message
         if plan.rewrites:

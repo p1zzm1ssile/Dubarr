@@ -105,6 +105,11 @@ FIELDS = [
       env_str("SUBTITLE_LANGUAGES", default="eng"), section="Languages",
       help="Subtitle tracks inside the file in any other language are removed, forced ones included. "
            "Subtitles with no language tag are always kept."),
+    F("keep_original_audio", "general", "Always keep the original language audio", "bool",
+      env_bool("KEEP_ORIGINAL_AUDIO", default=False), section="Languages",
+      help="Keeps the audio in the film's or show's original language too, e.g. Japanese for anime, without adding "
+           "every such language to the list above. The original language comes from Radarr or Sonarr, or else from "
+           "an audio track flagged as the original. When neither says, no audio language is removed from that file."),
     F("strip_audio", "general", "Remove unwanted audio", "bool",
       env_bool("STRIP_AUDIO", default=True), section="Languages"),
     F("strip_subtitles", "general", "Remove unwanted subtitles", "bool",

@@ -21,6 +21,7 @@ It's built to be safe to leave running:
 | Languages you keep, plus others | Removes the others (audio and subtitles, each can be turned off) |
 | No audio in a language you keep | Leaves it alone, flags it |
 | An audio track with no language tag | Leaves it alone, flags it until you tag it |
+| Audio in the film's original language, e.g. Japanese for anime | Keeps it too, if *Always keep the original language audio* is on |
 | Commentary tracks | Removes them (can be turned off) |
 | Several audio tracks in one language | Keeps the best-quality one (can be turned off) |
 | Subtitle files beside the film (Film.fr.srt) in other languages | Removes them, no rewrite needed (can be turned off) |
@@ -31,6 +32,8 @@ Video, chapters, fonts and anything that isn't audio or subtitles is always kept
 **Untagged tracks:** press *Listen & tag* on the Dashboard to hear a 30-second sample of an audio track, or read a few lines of a subtitle track, then choose its language. Dubarr writes the tag into the file (MKV files in place, in a moment), so it isn't flagged again. Picture-based subtitles (Blu-ray PGS) can't be shown as text. Files that are still seeding aren't tagged, as that would change the torrent's data.
 
 Languages are set once for everything, and can be overridden per library, e.g. Japanese + English audio for an anime folder.
+
+**Original language audio:** turn on *Always keep the original language audio* in Settings > General to keep a film's original audio alongside your languages, without listing every language films are made in. Dubarr asks Radarr or Sonarr for the original language, or failing that uses an audio track flagged as the original. If neither says, Dubarr removes no audio languages from that file and lists it under *Original language unknown*.
 
 MKV files are rewritten with mkvmerge (keeps Dolby Vision, HDR10+, fonts, chapters and tags). MP4 files are rewritten with ffmpeg.
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Always keep the original language audio.** A new setting in Settings > General keeps audio in a film's or show's original language alongside your languages, so an anime keeps its Japanese audio without adding Japanese (and every other language films are made in) to the list. The original language comes from Radarr or Sonarr (Sonarr v4), or else from an audio track flagged as the original. When neither says, no audio language is removed from that file, and it's listed under "Original language unknown". Off by default.
+- The first scan after updating reads every file again, to pick up the original-language flag.
+
 ## 0.4.1
 
 - **Re-check removes deleted files.** Pressing Re-check on a file that has since been deleted or renamed now takes it off the Dashboard, rather than leaving it there until the next full scan.

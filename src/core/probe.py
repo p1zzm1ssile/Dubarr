@@ -9,7 +9,7 @@ from utils.languages import normalise
 from utils.proc import wrap
 
 # Raise when probe() starts recording something new, so cached results are read again
-PROBE_VERSION = 3
+PROBE_VERSION = 4
 
 TYPES = {"video": "video", "audio": "audio", "subtitle": "subtitle"}
 
@@ -31,6 +31,7 @@ class Track:
     profile: str = ""   # e.g. "DTS-HD MA", or Atmos on Dolby Digital Plus
     frames: int = 0     # for subtitles, roughly the number of lines
     visual_impaired: bool = False  # audio description for the blind
+    original: bool = False  # flagged as the film's original language (Matroska's "original" flag)
 
     def to_dict(self):
         return asdict(self)
@@ -146,6 +147,7 @@ def parse(path: str, data: dict) -> MediaInfo:
             frames=_int(tags.get("number_of_frames") or tags.get("number_of_frames-eng") or s.get("nb_frames")),
             visual_impaired=bool(disposition.get("visual_impaired"))
             or any(word in title.lower() for word in ("audio description", "descriptive")),
+            original=bool(disposition.get("original")),
         ))
     try:
         duration = float(fmt.get("duration") or 0)

@@ -5,6 +5,7 @@ import time
 
 import requests
 
+from utils.languages import UNDEFINED, normalise
 from utils.paths import inside, to_remote
 
 CACHE_SECONDS = 600
@@ -53,22 +54,30 @@ class Arr:
         return self._request("GET", "/system/status").get("version", "")
 
     def items(self):
-        """Every movie or series, with its folder. Kept for 10 minutes, as libraries can be big."""
+        """Every movie or series, as (id, folder, title, original language code or None).
+        Kept for 10 minutes, as libraries can be big."""
         with self._lock:
             if self._items is None or time.time() - self._loaded > CACHE_SECONDS:
                 endpoint = "/movie" if self.kind == "radarr" else "/series"
-                self._items = [(i["id"], i.get("path") or "", i.get("title", "")) for i in self._request("GET", endpoint)]
+                self._items = [(i["id"], i.get("path") or "", i.get("title", ""), original_language(i))
+                               for i in self._request("GET", endpoint)]
                 self._loaded = time.time()
             return self._items
 
+    def _match(self, local_path):
+        remote = to_remote(local_path, self.paths)
+        matches = [item for item in self.items() if item[1] and inside(remote, item[1])]
+        return max(matches, key=lambda m: len(m[1])) if matches else None
+
     def find(self, local_path):
         """The movie or series a file belongs to, as (id, title), or None."""
-        remote = to_remote(local_path, self.paths)
-        matches = [(id, folder, title) for id, folder, title in self.items() if folder and inside(remote, folder)]
-        if not matches:
-            return None
-        id, _, title = max(matches, key=lambda m: len(m[1]))
-        return id, title
+        match = self._match(local_path)
+        return (match[0], match[2]) if match else None
+
+    def original_language(self, local_path):
+        """The original language of the movie or series a file belongs to, as a code, or None."""
+        match = self._match(local_path)
+        return match[3] if match else None
 
     def rescan(self, local_path):
         """Ask Radarr or Sonarr to read the file again. Returns the title, or None if it isn't theirs."""
@@ -81,6 +90,15 @@ class Arr:
         else:
             self._request("POST", "/command", json={"name": "RescanSeries", "seriesId": id})
         return title
+
+
+def original_language(item):
+    """Radarr and Sonarr (v4) give it as {"id": 8, "name": "Japanese"}, sometimes with a variant like
+    "Portuguese (Brazil)". "Unknown", "Original" and "Any" mean they don't know."""
+    language = item.get("originalLanguage") or {}
+    label = (language.get("name") if isinstance(language, dict) else str(language)) or ""
+    code = normalise(label.split("(")[0])
+    return None if code == UNDEFINED else code
 
 
 class Bazarr:

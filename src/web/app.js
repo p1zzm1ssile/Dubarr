@@ -128,7 +128,7 @@ api("/api/session").then((s) => {
 // ---------- Dashboard ----------
 
 const STATUS_STYLE = {
-  change: "info", seeding: "", no_wanted_audio: "warn", unknown_audio: "warn", unknown_subtitles: "warn", too_small: "",
+  change: "info", seeding: "", no_wanted_audio: "warn", unknown_audio: "warn", unknown_subtitles: "warn", unknown_original: "warn", too_small: "",
   error: "bad", no_audio: "", clean: "ok", ignored: "",
 };
 
@@ -138,6 +138,7 @@ const STATUS_HELP = {
   no_wanted_audio: "None of the audio is in a language you keep, so Dubarr leaves these alone. Replace them in Radarr or Sonarr if you want them in your language.",
   unknown_audio: "At least one audio track has no language tag, so Dubarr can't tell what it is and leaves the file alone. Press Listen & tag to hear it and set its language; the tag is written into the file, so it won't come back here.",
   unknown_subtitles: "Nothing to remove, but a subtitle track has no language tag. Press Listen & tag to read a few lines and set its language, so Dubarr knows whether to keep it.",
+  unknown_original: "Nothing else to remove, but there's audio in another language that might be the original, and Always keep the original language audio is on. Connect Radarr or Sonarr so Dubarr knows the original language.",
   error: "Files that couldn't be read or changed. The original is always left as it was.",
   no_audio: "Files with no audio at all.",
   clean: "Only languages you keep. Nothing to do.",
