@@ -1,10 +1,18 @@
 <?xml version="1.0"?>
-<Maintainer>
-  <Icon>https://raw.githubusercontent.com/p1zzm1ssile/Dubarr/main/src/web/icon.png</Icon>
-  <Profile>p1zzm1ssile makes tools that keep an Unraid media server tidy and running smoothly alongside Radarr, Sonarr and Jellyfin.
+<CommunityApplications>
+  <Profile>
+Tools that keep an Unraid media server tidy and running smoothly alongside Radarr, Sonarr and Jellyfin.
 
-Dubarr removes audio and subtitle tracks in languages you don't want, keeps the best track in the ones you do, and flags files with no audio in your language. It starts in report-only mode, keeps every original in a recycle folder with one-click restore, and waits for torrents to finish seeding.
+**Dubarr** removes audio and subtitle tracks in languages you don't want, keeps the best track in the ones you do, and flags files with no audio in your language. It starts in report-only mode, keeps every original in a recycle folder with one-click restore, and waits for torrents to finish seeding.
 
-Everything is set up in a web UI. Bug reports and ideas are welcome on GitHub.</Profile>
-  <WebPage>https://github.com/p1zzm1ssile/Dubarr</WebPage>
-</Maintainer>
+**Evictarr** keeps your download clients clean. It removes imported, stalled and failed downloads, blocks releases containing malware or files you don't want and searches for replacements, and can skip samples and subtitles or audio that aren't in your languages. It works with qBittorrent, RDTClient, Deluge, Transmission and SABnzbd. Evictarr is a maintained fork of [Purgarr](https://github.com/steveharsant/purgarr) by Steve Harsant.
+
+**Setuparr** checks your Sonarr, Radarr, Prowlarr, Seerr, Jellyfin and Plex setup against the TRaSH guides, including Unraid folder mappings, tags and anime, and fixes what doesn't match with one button or shows you how. It never scans your server: it reads only the Unraid settings files you send it, and drops passwords, API keys and personal details as it reads them.
+
+**Duplicatearr** finds the same film, episode, poster or extra stored more than once in your library, even when the copies are different encodes, and helps you keep the best one.
+
+All are set up in a web UI. For support, please open an issue on GitHub: [Dubarr](https://github.com/p1zzm1ssile/Dubarr/issues), [Evictarr](https://github.com/p1zzm1ssile/Evictarr/issues), [Setuparr](https://github.com/p1zzm1ssile/Setuparr/issues) or [Duplicatearr](https://github.com/p1zzm1ssile/Duplicatearr/issues). For anything private, email [p1zzm1ssilerepo@gmail.com](mailto:p1zzm1ssilerepo@gmail.com).
+  </Profile>
+  <Icon>https://avatars.githubusercontent.com/u/336739941?v=4</Icon>
+  <WebPage>https://github.com/p1zzm1ssile/unraid-templates</WebPage>
+</CommunityApplications>
