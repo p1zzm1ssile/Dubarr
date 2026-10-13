@@ -388,8 +388,36 @@ def test_flagged_tracks_that_disagree_mean_unknown():
     assert p.status == plans.UNKNOWN_ORIGINAL
 
 
-def test_original_alone_is_still_flagged_as_no_wanted_audio():
-    p = decide(media(VIDEO, audio("jpn"), audio("fra")), with_original("jpn"))
+def test_original_only_gets_its_own_label():
+    p = decide(media(VIDEO, audio("jpn", default=True), sub("eng")), with_original("jpn"))
+    assert p.status == plans.ORIGINAL_ONLY
+    assert p.message == "Only Japanese audio, the original language"
+
+
+def test_original_only_still_loses_other_languages():
+    p = decide(media(VIDEO, audio("jpn", default=True), audio("spa"), sub("eng")), with_original("jpn"))
+    assert p.status == plans.CHANGE
+    assert [r["index"] for r in p.remove] == [2]
+    assert p.message == "Remove Spanish audio. Only Japanese audio, the original language"
+
+
+def test_original_only_from_the_flag():
+    p = decide(media(VIDEO, audio("jpn", original=True)), ORIGINAL)
+    assert p.status == plans.ORIGINAL_ONLY
+
+
+def test_neither_yours_nor_the_original_is_still_a_warning():
+    p = decide(media(VIDEO, audio("fra"), audio("deu")), with_original("jpn"))
+    assert p.status == plans.NO_WANTED_AUDIO
+
+
+def test_unknown_original_with_none_of_yours_is_still_a_warning():
+    p = decide(media(VIDEO, audio("jpn")), ORIGINAL)
+    assert p.status == plans.NO_WANTED_AUDIO
+
+
+def test_without_the_setting_original_only_is_a_warning():
+    p = decide(media(VIDEO, audio("jpn")), Rules(["eng"], ["eng"], original_language="jpn"))
     assert p.status == plans.NO_WANTED_AUDIO
 
 

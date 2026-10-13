@@ -33,7 +33,7 @@ Video, chapters, fonts and anything that isn't audio or subtitles is always kept
 
 Languages are set once for everything, and can be overridden per library, e.g. Japanese + English audio for an anime folder.
 
-**Original language audio:** turn on *Always keep the original language audio* in Settings > General to keep a film's original audio alongside your languages, without listing every language films are made in. Dubarr asks Radarr or Sonarr for the original language, or failing that uses an audio track flagged as the original. If neither says, Dubarr removes no audio languages from that file and lists it under *Original language unknown*.
+**Original language audio:** turn on *Always keep the original language audio* in Settings > General to keep a film's original audio alongside your languages, without listing every language films are made in. Dubarr asks Radarr or Sonarr for the original language, or failing that uses an audio track flagged as the original. If neither says, Dubarr removes no audio languages from that file and lists it under *Original language unknown*. A film with none of your languages but with its original audio, like Japanese-only anime, isn't flagged: it's listed under *Original language only*, and other languages are still removed from it.
 
 MKV files are rewritten with mkvmerge (keeps Dolby Vision, HDR10+, fonts, chapters and tags). MP4 files are rewritten with ffmpeg.
 

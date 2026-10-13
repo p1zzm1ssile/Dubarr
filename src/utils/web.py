@@ -52,6 +52,7 @@ STATUSES = {
     plans.UNKNOWN_AUDIO: "Untagged audio",
     plans.UNKNOWN_SUBTITLES: "Untagged subtitles",
     plans.UNKNOWN_ORIGINAL: "Original language unknown",
+    plans.ORIGINAL_ONLY: "Original language only",
     ERROR: "Problems",
     plans.NO_AUDIO: "No audio",
     plans.CLEAN: "Already clean",
