@@ -15,6 +15,6 @@
   <ExtraParams/>
   <Config Name="Web UI port" Target="9892" Default="9892" Mode="tcp" Description="Port for the Dubarr web UI" Type="Port" Display="always" Required="true" Mask="false">9892</Config>
   <Config Name="Config" Target="/config" Default="/mnt/user/appdata/dubarr" Mode="rw" Description="Settings, login, database and logs" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/dubarr</Config>
-  <Config Name="Movies" Target="/movies" Default="/mnt/user/data/media/movies" Mode="rw" Description="Your movie library. Needs read/write, as Dubarr rewrites files. Map the same folder Radarr uses." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/data/media/movies</Config>
-  <Config Name="TV" Target="/tv" Default="/mnt/user/data/media/tv" Mode="rw" Description="Your TV library. Needs read/write, as Dubarr rewrites files. Map the same folder Sonarr uses." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/data/media/tv</Config>
+  <Config Name="Movies" Target="/movies" Default="" Mode="rw" Description="Your movie library. Needs read/write, as Dubarr rewrites files. Map the same folder Radarr uses." Type="Path" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="TV" Target="/tv" Default="" Mode="rw" Description="Your TV library. Needs read/write, as Dubarr rewrites files. Map the same folder Sonarr uses." Type="Path" Display="always" Required="false" Mask="false"></Config>
 </Container>

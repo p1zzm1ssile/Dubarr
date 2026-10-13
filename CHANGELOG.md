@@ -6,6 +6,11 @@
 - **Original language only.** With that setting on, a film or series that only comes in its original language (Japanese-only anime, say) is no longer flagged as "No wanted audio". It gets its own Dashboard list, "Original language only", and other audio languages are still removed from it. It's tagged `original-language-only` in Radarr, Sonarr and Jellyfin, so you can filter by it there; the tag can be changed, or left empty to not tag, in Settings > General.
 - The first scan after updating reads every file again, to pick up the original-language flag.
 
+## 0.4.2
+
+- **Addresses start with http://.** Radarr, Sonarr, Bazarr and Jellyfin addresses start empty on a new install, with an example such as `http://192.168.1.10:7878`, instead of `localhost`, which inside a container is the container itself. Addresses must start with `http://` or `https://`; ones saved before this get `http://` added by themselves, so nothing needs re-entering.
+- **No folder mappings filled in on install.** The Unraid template's Movies and TV folders start empty, so you map your own.
+
 ## 0.4.1
 
 - **Re-check removes deleted files.** Pressing Re-check on a file that has since been deleted or renamed now takes it off the Dashboard, rather than leaving it there until the next full scan.
