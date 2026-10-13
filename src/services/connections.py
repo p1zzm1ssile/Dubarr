@@ -39,6 +39,7 @@ class Arr:
         self.timeout = cfg.request_timeout
         self._items = None
         self._loaded = 0
+        self._tags = {}
         self._lock = threading.Lock()
 
     def _request(self, method, path, **kwargs):
@@ -54,30 +55,56 @@ class Arr:
         return self._request("GET", "/system/status").get("version", "")
 
     def items(self):
-        """Every movie or series, as (id, folder, title, original language code or None).
+        """Every movie or series, as {id, folder, title, original (language code or None), tags (ids)}.
         Kept for 10 minutes, as libraries can be big."""
         with self._lock:
             if self._items is None or time.time() - self._loaded > CACHE_SECONDS:
                 endpoint = "/movie" if self.kind == "radarr" else "/series"
-                self._items = [(i["id"], i.get("path") or "", i.get("title", ""), original_language(i))
+                self._items = [{"id": i["id"], "folder": i.get("path") or "", "title": i.get("title", ""),
+                                "original": original_language(i), "tags": list(i.get("tags") or [])}
                                for i in self._request("GET", endpoint)]
                 self._loaded = time.time()
             return self._items
 
     def _match(self, local_path):
         remote = to_remote(local_path, self.paths)
-        matches = [item for item in self.items() if item[1] and inside(remote, item[1])]
-        return max(matches, key=lambda m: len(m[1])) if matches else None
+        matches = [item for item in self.items() if item["folder"] and inside(remote, item["folder"])]
+        return max(matches, key=lambda m: len(m["folder"])) if matches else None
 
     def find(self, local_path):
         """The movie or series a file belongs to, as (id, title), or None."""
         match = self._match(local_path)
-        return (match[0], match[2]) if match else None
+        return (match["id"], match["title"]) if match else None
 
     def original_language(self, local_path):
         """The original language of the movie or series a file belongs to, as a code, or None."""
         match = self._match(local_path)
-        return match[3] if match else None
+        return match["original"] if match else None
+
+    def _tag_id(self, label):
+        """The id of a tag, made if Radarr or Sonarr doesn't have it yet."""
+        if label not in self._tags:
+            for tag in self._request("GET", "/tag") or []:
+                self._tags[tag.get("label", "").lower()] = tag["id"]
+        if label not in self._tags:
+            self._tags[label] = self._request("POST", "/tag", json={"label": label})["id"]
+        return self._tags[label]
+
+    def add_tag(self, local_path, label):
+        """Tag the movie or series a file belongs to. Returns its title, or None if it isn't theirs
+        or already has the tag."""
+        match = self._match(local_path)
+        if not match:
+            return None
+        tag = self._tag_id(label)
+        if tag in match["tags"]:
+            return None
+        if self.kind == "radarr":
+            self._request("PUT", "/movie/editor", json={"movieIds": [match["id"]], "tags": [tag], "applyTags": "add"})
+        else:
+            self._request("PUT", "/series/editor", json={"seriesIds": [match["id"]], "tags": [tag], "applyTags": "add"})
+        match["tags"].append(tag)
+        return match["title"]
 
     def rescan(self, local_path):
         """Ask Radarr or Sonarr to read the file again. Returns the title, or None if it isn't theirs."""
@@ -168,10 +195,15 @@ class Bazarr:
 
 class Jellyfin:
     def __init__(self, cfg):
+        self.name = "Jellyfin"
         self.url = cfg.jellyfin_url
         self.api_key = cfg.jellyfin_api_key
         self.paths = cfg.jellyfin_paths
         self.timeout = cfg.request_timeout
+        self._items = None
+        self._loaded = 0
+        self._user = None
+        self._lock = threading.Lock()
 
     def _request(self, method, path, **kwargs):
         headers = {"Authorization": f'MediaBrowser Token="{self.api_key}"'}
@@ -189,6 +221,48 @@ class Jellyfin:
         """Tell Jellyfin a file changed, so it reads its tracks again."""
         self._request("POST", "/Library/Media/Updated", json={
             "Updates": [{"Path": to_remote(local_path, self.paths), "UpdateType": "Modified"}]})
+
+    def items(self):
+        """Every movie and series, with its path and tags. Kept for 10 minutes."""
+        with self._lock:
+            if self._items is None or time.time() - self._loaded > CACHE_SECONDS:
+                answer = self._request("GET", "/Items", params={
+                    "userId": self._admin(), "Recursive": "true", "IncludeItemTypes": "Movie,Series", "Fields": "Path,Tags"}) or {}
+                self._items = [{"id": i["Id"], "type": i.get("Type"), "path": i.get("Path") or "",
+                                "title": i.get("Name", ""), "tags": list(i.get("Tags") or [])}
+                               for i in answer.get("Items", [])]
+                self._loaded = time.time()
+            return self._items
+
+    def _match(self, local_path):
+        """The movie (its own file) or series (its folder) a file belongs to."""
+        remote = to_remote(local_path, self.paths)
+        matches = [i for i in self.items() if i["path"]
+                   and (i["path"] == remote if i["type"] == "Movie" else inside(remote, i["path"]))]
+        return max(matches, key=lambda i: len(i["path"])) if matches else None
+
+    def _admin(self):
+        """Editing an item goes through a user who can edit metadata: the first administrator."""
+        if self._user is None:
+            users = self._request("GET", "/Users") or []
+            admins = [u for u in users if (u.get("Policy") or {}).get("IsAdministrator")]
+            if not admins:
+                raise ServiceError("Jellyfin has no administrator to edit tags with")
+            self._user = admins[0]["Id"]
+        return self._user
+
+    def add_tag(self, local_path, label):
+        """Tag the movie or series a file belongs to, so it can be filtered by in Jellyfin.
+        Returns its title, or None if Jellyfin doesn't know it or it already has the tag."""
+        match = self._match(local_path)
+        if not match or any(t.lower() == label for t in match["tags"]):
+            return None
+        # Jellyfin saves the whole item, so send it back as it is with the tag added
+        item = self._request("GET", f"/Users/{self._admin()}/Items/{match['id']}")
+        item["Tags"] = list(item.get("Tags") or []) + [label]
+        self._request("POST", f"/Items/{match['id']}", json=item)
+        match["tags"].append(label)
+        return match["title"]
 
 
 def webhook_paths(payload: dict, kind: str):

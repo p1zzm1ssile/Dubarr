@@ -3,7 +3,7 @@
 ## Unreleased
 
 - **Always keep the original language audio.** A new setting in Settings > General keeps audio in a film's or show's original language alongside your languages, so an anime keeps its Japanese audio without adding Japanese (and every other language films are made in) to the list. The original language comes from Radarr or Sonarr (Sonarr v4), or else from an audio track flagged as the original. When neither says, no audio language is removed from that file, and it's listed under "Original language unknown". Off by default.
-- **Original language only.** With that setting on, a film or series that only comes in its original language (Japanese-only anime, say) is no longer flagged as "No wanted audio". It gets its own Dashboard list, "Original language only", and other audio languages are still removed from it.
+- **Original language only.** With that setting on, a film or series that only comes in its original language (Japanese-only anime, say) is no longer flagged as "No wanted audio". It gets its own Dashboard list, "Original language only", and other audio languages are still removed from it. It's tagged `original-language-only` in Radarr, Sonarr and Jellyfin, so you can filter by it there; the tag can be changed, or left empty to not tag, in Settings > General.
 - The first scan after updating reads every file again, to pick up the original-language flag.
 
 ## 0.4.1

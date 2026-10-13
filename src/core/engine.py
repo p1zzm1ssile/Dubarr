@@ -137,7 +137,7 @@ class Engine:
         self.last_apply = 0.0
         self.last_purge = 0.0
         self._services = {}
-        self._unreachable = {}  # Radarr or Sonarr: when to try asking for original languages again
+        self._unreachable = {}  # Radarr, Sonarr or Jellyfin: when to try asking them again
 
     # Jobs
 
@@ -224,6 +224,25 @@ class Engine:
                 return code
         return None
 
+    def tag_original_only(self, path):
+        """Tag a film or series that only has its original-language audio in Radarr or Sonarr and Jellyfin,
+        so it can be filtered by there."""
+        label = config.original_only_tag
+        if not label or not config.keep_original_audio:
+            return
+        for kind in ("radarr", "sonarr", "jellyfin"):
+            service = self._service(kind)
+            if not service or time.time() < self._unreachable.get(kind, 0):
+                continue
+            try:
+                title = service.add_tag(path, label)
+            except ServiceError as e:
+                logger.warning(f"Couldn't tag {os.path.basename(path)} in {service.name}: {e}. Trying again in 10 minutes")
+                self._unreachable[kind] = time.time() + 600
+                continue
+            if title:
+                logger.info(f"Tagged {title} as {label} in {service.name}: only its original language audio")
+
     def _walk(self, library):
         recycle = config.recycle_folder
         for folder, dirs, files in os.walk(library["path"]):
@@ -299,6 +318,8 @@ class Engine:
         self.store.save_file(path, library["path"], st.st_size, st.st_mtime, st.st_nlink,
                              info.to_dict() if info else None, status, message,
                              plan.to_dict() if plan else None, plan.saved_bytes if plan else 0)
+        if plan and plan.original_only:
+            self.tag_original_only(path)
         return status
 
     def scan(self, trigger="manual", paths=None, wait=False):

@@ -110,6 +110,11 @@ FIELDS = [
       help="Keeps the audio in the film's or show's original language too, e.g. Japanese for anime, without adding "
            "every such language to the list above. The original language comes from Radarr or Sonarr, or else from "
            "an audio track flagged as the original. When neither says, no audio language is removed from that file."),
+    F("original_only_tag", "general", "Tag films that only have their original language as", "text",
+      env_str("ORIGINAL_ONLY_TAG", default="original-language-only"), section="Languages",
+      help="With the setting above on, films and series with none of your languages but with their original audio "
+           "(e.g. Japanese-only anime) get this tag in Radarr, Sonarr and Jellyfin, so you can filter by it there. "
+           "Lowercase letters, numbers and dashes. Leave empty to not tag them."),
     F("strip_audio", "general", "Remove unwanted audio", "bool",
       env_bool("STRIP_AUDIO", default=True), section="Languages"),
     F("strip_subtitles", "general", "Remove unwanted subtitles", "bool",
@@ -352,6 +357,10 @@ def coerce(field, value):
         if not codes:
             raise ValueError("needs at least one language")
         return ",".join(codes)
+    if field["key"] == "original_only_tag":
+        value = value.lower()
+        if value and not all(c.isascii() and (c.isalnum() or c == "-") for c in value):
+            raise ValueError("can only have letters, numbers and dashes, as Radarr and Sonarr require")
     if field["key"].endswith("_path_map"):
         parse_path_map(value)
     if field["key"] == "recycle_folder" and value and not value.startswith("/"):

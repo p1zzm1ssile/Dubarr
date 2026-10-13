@@ -81,6 +81,7 @@ class Plan:
     mark_forced: list = field(default_factory=list)  # subtitle tracks that are forced but not flagged as such
     saved_bytes: int = 0                         # roughly how much smaller the file gets (0 if unknown)
     remove_files: list = field(default_factory=list)  # subtitle files beside the video to remove
+    original_only: str = None                    # the original language, when it's the only audio kept
 
     @property
     def rewrites(self):
@@ -95,7 +96,7 @@ class Plan:
         return {
             "status": self.status, "message": self.message, "remove": self.remove,
             "keep": self.keep, "default_audio": self.default_audio, "saved_bytes": self.saved_bytes,
-            "mark_forced": self.mark_forced, "remove_files": self.remove_files,
+            "mark_forced": self.mark_forced, "remove_files": self.remove_files, "original_only": self.original_only,
         }
 
 
@@ -312,7 +313,7 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
         if unsure_note:
             return Plan(UNKNOWN_ORIGINAL, unsure_note, keep=every)
         if original_only:
-            return Plan(ORIGINAL_ONLY, original_only, keep=every)
+            return Plan(ORIGINAL_ONLY, original_only, keep=every, original_only=original)
         return Plan(CLEAN, "Only wanted languages", keep=every)
 
     removed = {r["index"] for r in remove}
@@ -321,7 +322,7 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
         n = len(remove_files)
         message = f"Remove {n} {describe(_file_languages(remove_files))} subtitle file{'s' if n > 1 else ''}"
         return Plan(CHANGE, message + (f". {original_only}" if original_only else ""),
-                    keep=keep, remove_files=remove_files)
+                    keep=keep, remove_files=remove_files, original_only=original if original_only else None)
 
     # Flag forced subtitles that nobody flagged, so Jellyfin shows them for foreign-language scenes by itself
     mark_forced = []
@@ -375,4 +376,4 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
         text += f". {original_only}"
     return Plan(CHANGE, "Remove " + text, remove=remove, keep=keep,
                 default_audio=default_audio, mark_forced=mark_forced, saved_bytes=sum(r["size"] for r in remove),
-                remove_files=remove_files)
+                remove_files=remove_files, original_only=original if original_only else None)
