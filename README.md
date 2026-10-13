@@ -21,6 +21,7 @@ It's built to be safe to leave running:
 | Languages you keep, plus others | Removes the others (audio and subtitles, each can be turned off) |
 | No audio in a language you keep | Leaves it alone, flags it |
 | An audio track with no language tag | Leaves it alone, flags it until you tag it |
+| Audio in the film's original language, e.g. Japanese for anime | Keeps it too, if *Always keep the original language audio* is on |
 | Commentary tracks | Removes them (can be turned off) |
 | Several audio tracks in one language | Keeps the best-quality one (can be turned off) |
 | Subtitle files beside the film (Film.fr.srt) in other languages | Removes them, no rewrite needed (can be turned off) |
@@ -31,6 +32,8 @@ Video, chapters, fonts and anything that isn't audio or subtitles is always kept
 **Untagged tracks:** press *Listen & tag* on the Dashboard to hear a 30-second sample of an audio track, or read a few lines of a subtitle track, then choose its language. Dubarr writes the tag into the file (MKV files in place, in a moment), so it isn't flagged again. Picture-based subtitles (Blu-ray PGS) can't be shown as text. Files that are still seeding aren't tagged, as that would change the torrent's data.
 
 Languages are set once for everything, and can be overridden per library, e.g. Japanese + English audio for an anime folder.
+
+**Original language audio:** turn on *Always keep the original language audio* in Settings > General to keep a film's original audio alongside your languages, without listing every language films are made in. Dubarr asks Radarr or Sonarr for the original language, or failing that uses an audio track flagged as the original. If neither says, Dubarr removes no audio languages from that file and lists it under *Original language unknown*. A film with none of your languages but with its original audio, like Japanese-only anime, isn't flagged: it's listed under *Original language only*, and other languages are still removed from it. It's also tagged `original-language-only` in Radarr, Sonarr and Jellyfin (change or turn off the tag in Settings > General), so you can filter by it there.
 
 MKV files are rewritten with mkvmerge (keeps Dolby Vision, HDR10+, fonts, chapters and tags). MP4 files are rewritten with ffmpeg.
 
@@ -87,6 +90,14 @@ cd src && CONFIG_DIR=../config LIBRARIES=/path/to/test/library python main.py
 ## Contact
 
 Bugs and ideas: [open an issue](https://github.com/p1zzm1ssile/Dubarr/issues/new?title=%5BDubarr%5D%20). For anything private, email [p1zzm1ssilerepo@gmail.com](mailto:p1zzm1ssilerepo@gmail.com?subject=Dubarr). Both are also on the Contact page in the web UI.
+
+## Free forever
+
+Every feature in Dubarr is free and always will be. There are no paid tiers, no Pro account, no subscriptions and no telemetry, and new features will be free too. Services Dubarr works with, like Radarr, Sonarr, Bazarr and Jellyfin, have their own terms.
+
+## About the developer
+
+I'm an ISO 27001 Lead Auditor with combined-type ADHD, dyslexia and dyscalculia. I can read code and follow its logic and security well, but writing it out myself isn't possible. So I design what Dubarr does and how it works, and use AI as an assistive tool to write the code from that design. I review and test every change before it's released.
 
 ## Licence
 

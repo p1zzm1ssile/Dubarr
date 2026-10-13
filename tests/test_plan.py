@@ -328,3 +328,111 @@ def test_picture_subtitles_go_when_a_text_file_is_beside_the_film():
     p = decide(info, Rules(["eng"], ["eng"], prefer_text_files=True))
     assert [r["index"] for r in p.remove] == [2]  # the forced picture track stays
     assert "1 picture subtitle track (a text file replaces it)" in p.message
+
+
+# Keeping the original language
+
+ORIGINAL = Rules(["eng"], ["eng"], keep_original_audio=True)
+
+
+def with_original(code):
+    return Rules(["eng"], ["eng"], keep_original_audio=True, original_language=code)
+
+
+def test_keeps_the_original_language_from_radarr():
+    p = decide(media(VIDEO, audio("eng", default=True), audio("jpn"), audio("fra"), sub("jpn")), with_original("jpn"))
+    assert p.status == plans.CHANGE
+    assert [r["index"] for r in p.remove] == [3, 4]
+    assert p.message == "Remove French audio and Japanese subtitles"
+
+
+def test_original_language_is_ignored_when_the_setting_is_off():
+    rules = Rules(["eng"], ["eng"], original_language="jpn")
+    p = decide(media(VIDEO, audio("eng", default=True), audio("jpn")), rules)
+    assert [r["index"] for r in p.remove] == [2]
+
+
+def test_original_already_wanted_changes_nothing():
+    p = decide(media(VIDEO, audio("eng", default=True), audio("fra")), with_original("eng"))
+    assert [r["index"] for r in p.remove] == [2]
+
+
+def test_track_flagged_original_stands_in_for_radarr():
+    p = decide(media(VIDEO, audio("eng", default=True), audio("kor", original=True), audio("spa")), ORIGINAL)
+    assert [r["index"] for r in p.remove] == [3]
+    assert p.message == "Remove Spanish audio"
+
+
+def test_radarr_wins_over_the_flag():
+    p = decide(media(VIDEO, audio("eng", default=True), audio("kor", original=True), audio("jpn")),
+               with_original("jpn"))
+    assert [r["index"] for r in p.remove] == [2]
+
+
+def test_unknown_original_keeps_other_audio_and_says_why():
+    p = decide(media(VIDEO, audio("eng", default=True), audio("jpn")), ORIGINAL)
+    assert p.status == plans.UNKNOWN_ORIGINAL
+    assert p.message == "Keeps Japanese audio, as the original language isn't known"
+    assert not p.remove
+
+
+def test_unknown_original_still_removes_subtitles():
+    p = decide(media(VIDEO, audio("eng", default=True), audio("jpn"), sub("fra")), ORIGINAL)
+    assert p.status == plans.CHANGE
+    assert [r["index"] for r in p.remove] == [3]
+    assert p.message == "Remove French subtitles. Keeps Japanese audio, as the original language isn't known"
+
+
+def test_flagged_tracks_that_disagree_mean_unknown():
+    p = decide(media(VIDEO, audio("eng", original=True), audio("jpn", original=True)), ORIGINAL)
+    assert p.status == plans.UNKNOWN_ORIGINAL
+
+
+def test_original_only_gets_its_own_label():
+    p = decide(media(VIDEO, audio("jpn", default=True), sub("eng")), with_original("jpn"))
+    assert p.status == plans.ORIGINAL_ONLY
+    assert p.message == "Only Japanese audio, the original language"
+
+
+def test_original_only_still_loses_other_languages():
+    p = decide(media(VIDEO, audio("jpn", default=True), audio("spa"), sub("eng")), with_original("jpn"))
+    assert p.status == plans.CHANGE
+    assert [r["index"] for r in p.remove] == [2]
+    assert p.message == "Remove Spanish audio. Only Japanese audio, the original language"
+
+
+def test_original_only_from_the_flag():
+    p = decide(media(VIDEO, audio("jpn", original=True)), ORIGINAL)
+    assert p.status == plans.ORIGINAL_ONLY
+
+
+def test_neither_yours_nor_the_original_is_still_a_warning():
+    p = decide(media(VIDEO, audio("fra"), audio("deu")), with_original("jpn"))
+    assert p.status == plans.NO_WANTED_AUDIO
+
+
+def test_unknown_original_with_none_of_yours_is_still_a_warning():
+    p = decide(media(VIDEO, audio("jpn")), ORIGINAL)
+    assert p.status == plans.NO_WANTED_AUDIO
+
+
+def test_without_the_setting_original_only_is_a_warning():
+    p = decide(media(VIDEO, audio("jpn")), Rules(["eng"], ["eng"], original_language="jpn"))
+    assert p.status == plans.NO_WANTED_AUDIO
+
+
+def test_one_audio_per_original_language():
+    p = decide(media(VIDEO, audio("eng", default=True), audio("jpn", codec="truehd"), audio("jpn", codec="ac3")),
+               with_original("jpn"))
+    assert [(r["index"], r["reason"]) for r in p.remove] == [(3, "Duplicate audio")]
+
+
+def test_your_language_stays_the_default_over_the_original():
+    p = decide(media(VIDEO, audio("fra", default=True), audio("jpn"), audio("eng")), with_original("jpn"))
+    assert p.default_audio == 3
+
+
+def test_reads_the_original_flag():
+    info = parse("/m/f.mkv", {"streams": [{"index": 0, "codec_type": "audio", "codec_name": "aac",
+                                           "tags": {"language": "jpn"}, "disposition": {"original": 1}}]})
+    assert info.tracks[0].original

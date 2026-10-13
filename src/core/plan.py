@@ -6,6 +6,11 @@ The rules:
   * If no audio is in a wanted language, change nothing and warn.
   * If any audio track has no language tag, change nothing and warn:
     there's no way to know it isn't the one you want.
+  * With keep_original_audio, audio in the film's original language is kept too, as if it were wanted.
+    The original language comes from Radarr or Sonarr, or failing that from a track flagged as the
+    original. If neither says, no audio is removed for its language, since it might be the original.
+    A file with none of your languages but with original-language audio isn't a warning: it's listed as
+    original language only, and other languages are removed from it as usual.
   * Commentary tracks are removed too, unless that's turned off: commentary
     audio and the subtitles of the commentary. The last non-commentary audio
     in a wanted language is never removed.
@@ -34,9 +39,11 @@ NO_WANTED_AUDIO = "no_wanted_audio"  # warning: none of the audio is in a wanted
 UNKNOWN_AUDIO = "unknown_audio"    # warning: an audio track isn't tagged with a language
 NO_AUDIO = "no_audio"              # the file has no audio at all
 UNKNOWN_SUBTITLES = "unknown_subtitles"  # nothing to remove, but a subtitle track isn't tagged
+UNKNOWN_ORIGINAL = "unknown_original"  # audio is kept only because the original language isn't known
+ORIGINAL_ONLY = "original_only"    # none of your languages, but the original is there and kept (Japanese-only anime)
 CLEAN = "clean"                    # only wanted tracks, nothing to do
 
-WARNINGS = (NO_WANTED_AUDIO, UNKNOWN_AUDIO, NO_AUDIO, UNKNOWN_SUBTITLES)
+WARNINGS = (NO_WANTED_AUDIO, UNKNOWN_AUDIO, NO_AUDIO, UNKNOWN_SUBTITLES, UNKNOWN_ORIGINAL)
 
 
 @dataclass
@@ -51,6 +58,17 @@ class Rules:
     assume_unlabelled_is_full: bool = False
     strip_subtitle_files: bool = True
     prefer_text_files: bool = False
+    keep_original_audio: bool = False
+    original_language: str = None  # for this file, from Radarr or Sonarr; None if they don't know
+
+
+def original_language(info: MediaInfo, rules: Rules):
+    """The film's original language: from Radarr or Sonarr, or else from audio flagged as the original.
+    None if neither says, or the flagged tracks disagree."""
+    if rules.original_language and rules.original_language not in (UNDEFINED, MULTIPLE, NO_LANGUAGE):
+        return rules.original_language
+    flagged = _languages([t for t in info.of("audio") if t.original and t.language not in (UNDEFINED, MULTIPLE)])
+    return flagged[0] if len(flagged) == 1 else None
 
 
 @dataclass
@@ -63,6 +81,7 @@ class Plan:
     mark_forced: list = field(default_factory=list)  # subtitle tracks that are forced but not flagged as such
     saved_bytes: int = 0                         # roughly how much smaller the file gets (0 if unknown)
     remove_files: list = field(default_factory=list)  # subtitle files beside the video to remove
+    original_only: str = None                    # the original language, when it's the only audio kept
 
     @property
     def rewrites(self):
@@ -77,7 +96,7 @@ class Plan:
         return {
             "status": self.status, "message": self.message, "remove": self.remove,
             "keep": self.keep, "default_audio": self.default_audio, "saved_bytes": self.saved_bytes,
-            "mark_forced": self.mark_forced, "remove_files": self.remove_files,
+            "mark_forced": self.mark_forced, "remove_files": self.remove_files, "original_only": self.original_only,
         }
 
 
@@ -202,19 +221,38 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
         count = f"{len(untagged)} audio track{'s have' if len(untagged) > 1 else ' has'}"
         return Plan(UNKNOWN_AUDIO, f"{count} no language tag{extra}. Check it by hand", keep=every)
 
+    # The original language is kept alongside yours. When it isn't known, any language might be it
+    keep_audio = list(rules.audio_languages)
+    original = original_language(info, rules) if rules.keep_original_audio else None
+    unsure = rules.keep_original_audio and not original
+    if original and original not in keep_audio:
+        keep_audio.append(original)
+
     # "Multiple languages" might well include yours, so it counts as wanted
     wanted_audio = [t for t in audio if t.language in rules.audio_languages or t.language == MULTIPLE]
+    original_only = None  # e.g. Japanese-only anime: nothing in your languages, but the original is there
+    if not wanted_audio and original:
+        wanted_audio = [t for t in audio if t.language == original]
+        if wanted_audio:
+            original_only = f"Only {describe([original])} audio, the original language"
     if not wanted_audio:
         return Plan(NO_WANTED_AUDIO,
                     f"No {describe(rules.audio_languages)} audio, only {describe(_languages(audio))}",
                     keep=every)
 
     remove = []
+    kept_unsure = []  # languages kept only because the original language isn't known
     if tracks and rules.strip_audio:
         for t in audio:
-            if t in wanted_audio or t.language == NO_LANGUAGE:
+            if t in wanted_audio or t.language in keep_audio or t.language == NO_LANGUAGE:
+                continue
+            if unsure:
+                if t.language not in kept_unsure:
+                    kept_unsure.append(t.language)
                 continue
             remove.append(_removal(t, "Unwanted audio language"))
+    unsure_note = (f"Keeps {describe(kept_unsure)} audio, as the original language isn't known"
+                   if kept_unsure else "")
 
     # Commentary goes too, as long as a proper wanted-language track stays
     if tracks and rules.strip_commentary and any(not t.commentary for t in wanted_audio):
@@ -239,7 +277,7 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
     # Duplicates in the languages you keep
     if tracks and rules.one_audio_per_language:
         removing = {r["index"] for r in remove}
-        for t in _duplicates(audio, rules.audio_languages, removing, lambda same: [best_audio(same)]):
+        for t in _duplicates(audio, keep_audio, removing, lambda same: [best_audio(same)]):
             remove.append(_removal(t, "Duplicate audio"))
     if tracks and rules.one_subtitle_per_language:
         removing = {r["index"] for r in remove}
@@ -272,14 +310,19 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
                         f"{count} subtitle track{'s have' if count > 1 else ' has'} no language tag. Tag "
                         f"{'them' if count > 1 else 'it'} so Dubarr knows whether to keep {'them' if count > 1 else 'it'}",
                         keep=every)
+        if unsure_note:
+            return Plan(UNKNOWN_ORIGINAL, unsure_note, keep=every)
+        if original_only:
+            return Plan(ORIGINAL_ONLY, original_only, keep=every, original_only=original)
         return Plan(CLEAN, "Only wanted languages", keep=every)
 
     removed = {r["index"] for r in remove}
     keep = [i for i in every if i not in removed]
     if not remove:
         n = len(remove_files)
-        return Plan(CHANGE, f"Remove {n} {describe(_file_languages(remove_files))} subtitle file{'s' if n > 1 else ''}",
-                    keep=keep, remove_files=remove_files)
+        message = f"Remove {n} {describe(_file_languages(remove_files))} subtitle file{'s' if n > 1 else ''}"
+        return Plan(CHANGE, message + (f". {original_only}" if original_only else ""),
+                    keep=keep, remove_files=remove_files, original_only=original if original_only else None)
 
     # Flag forced subtitles that nobody flagged, so Jellyfin shows them for foreign-language scenes by itself
     mark_forced = []
@@ -293,7 +336,7 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
     default_audio = None
     kept_audio = [t for t in audio if t.index not in removed]
     if not any(t.default for t in kept_audio):
-        order = {code: n for n, code in enumerate(rules.audio_languages)}
+        order = {code: n for n, code in enumerate(keep_audio)}
         best = min(kept_audio, key=lambda t: (t.commentary, order.get(t.language, len(order)), t.index))
         default_audio = best.index
 
@@ -327,6 +370,10 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
         n = len(remove_files)
         parts.append(f"{n} {describe(_file_languages(remove_files))} subtitle file{'s' if n > 1 else ''}")
     text = ", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1 else parts[0]
+    if unsure_note:
+        text += f". {unsure_note}"
+    if original_only:
+        text += f". {original_only}"
     return Plan(CHANGE, "Remove " + text, remove=remove, keep=keep,
                 default_audio=default_audio, mark_forced=mark_forced, saved_bytes=sum(r["size"] for r in remove),
-                remove_files=remove_files)
+                remove_files=remove_files, original_only=original if original_only else None)
