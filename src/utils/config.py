@@ -561,7 +561,7 @@ def webhook_token():
         pass
     token = secrets.token_urlsafe(24)
     os.makedirs(config_dir, exist_ok=True)
-    with open(token_file, "w") as f:
+    with os.fdopen(os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
         f.write(token)
     os.chmod(token_file, 0o600)
     return token

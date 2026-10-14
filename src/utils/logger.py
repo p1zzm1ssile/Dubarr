@@ -1,5 +1,7 @@
 # logger.py
 from loguru import logger
+import glob
+import re
 import sys
 import os
 import utils.config as config
@@ -12,6 +14,26 @@ if os.name == "nt":
 
 
 logger.remove()
+
+# Keys and passwords never go in the log, even inside an error message that quotes a web address
+SECRET_IN_ADDRESS = re.compile(r"(?i)\b(api_?key|token|password|passwd|pass|x-plex-token)=([^&\s'\"]+)")
+
+
+def redact(record):
+    message = SECRET_IN_ADDRESS.sub(r"\1=***", record["message"])
+    for key in config.SECRET_KEYS:
+        value = str(config.values.get(key) or "")
+        if len(value) >= 4:
+            message = message.replace(value, "***")
+    record["message"] = message
+
+
+def private(path, flags):
+    """Log files can only be read by the account the app runs as."""
+    return os.open(path, flags, 0o600)
+
+
+logger.configure(patcher=redact)
 logger.level("STARTUP", no=25, color="<cyan><bold>")
 logger.level("ACTION", no=25, color="<yellow><bold>")
 
@@ -44,6 +66,11 @@ if config.log_output in ["all", "stdout"]:
 
 # Always written, for the Logs page and the log download
 os.makedirs(config.log_dir, exist_ok=True)
+for existing in glob.glob(os.path.join(config.log_dir, "*.log*")):
+    try:
+        os.chmod(existing, 0o600)
+    except OSError:
+        pass
 logger.add(
     config.log_file,
     format="{time:YYYY-MM-DD HH:mm:ss} [{level}] {message}",
@@ -52,6 +79,7 @@ logger.add(
     retention=5,
     colorize=False,
     enqueue=True,
+    opener=private,
 )
 
 __all__ = ["logger"]
