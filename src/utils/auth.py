@@ -72,9 +72,9 @@ def _load():
 def _save(data):
     os.makedirs(config.config_dir, exist_ok=True)
     tmp = AUTH_FILE + ".tmp"
-    with open(tmp, "w") as f:
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
         json.dump(data, f)
-    os.chmod(tmp, 0o600)
+    os.chmod(tmp, 0o600)  # in case an older version left it behind
     os.replace(tmp, AUTH_FILE)
     global _account, _account_loaded
     _account, _account_loaded = data, True
