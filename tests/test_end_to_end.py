@@ -348,3 +348,24 @@ def test_apply_all_in_one_library(library, engine, tmp_path, monkeypatch):
     engine.apply("manual", force=True, library=str(anime))
     assert tracks(show, "audio") == ["eng"]
     assert tracks(film, "audio") == ["eng", "fra"]  # the other library is left for now
+
+
+def test_remove_tracks_by_hand(library, engine):
+    film = make_video(str(library / "Film" / "Film.mkv"), audio=("eng", "fre"), subtitles=("eng", "fre"))
+    srt = library / "Film" / "Film.en.srt"
+    srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n")
+    engine.scan()
+    with pytest.raises(ValueError, match="audio track has to stay"):
+        engine.plan_by_hand(film, [1, 2], [])
+    with pytest.raises(ValueError, match="isn't an audio or subtitle"):
+        engine.plan_by_hand(film, [0], [])
+    with pytest.raises(ValueError, match="Tick at least one"):
+        engine.plan_by_hand(film, [], [])
+
+    # English audio and the English subtitle track go, though they're languages you keep
+    engine.remove_by_hand(film, [1, 3], [str(srt)])
+    assert tracks(film, "audio") == ["fra"] and tracks(film, "subtitle") == ["fra"]
+    assert not srt.exists()
+    _, entries = engine.store.history(limit=10)
+    assert sorted(e["message"] for e in entries) == ["Removed a subtitle file beside the film by hand",
+                                                     "Removed by hand: English audio, English subtitles and 1 subtitle file"]

@@ -180,3 +180,18 @@ def test_nothing_is_removed_while_bazarrs_history_is_empty(subtitled, monkeypatc
     engine.tick()
     assert len(os.listdir(film)) == 4
     assert engine.store.file(str(film / "Film.mkv"))["status"] == "clean"
+
+
+def test_where_subtitle_files_came_from(fake_bazarr):
+    _, movie_path = fake_bazarr
+    history(movie_path, (5, "Film.en.srt"), (1, "Film.en.srt"))
+    ANSWERS[("GET", "/api/movies/history")]["data"][1]["provider"] = "opensubtitlescom"
+    folder = os.path.dirname(movie_path)
+    # A sync keeps the provider of the download it started from
+    assert Bazarr(config).subtitle_sources() == {f"{folder}/Film.en.srt": "opensubtitlescom"}
+
+    import utils.web as web
+    sources = {f"{folder}/Film.en.srt": "opensubtitlescom"}
+    assert web.with_source({"path": f"{folder}/Film.en.srt"}, sources)["source"] == "opensubtitlescom"
+    assert web.with_source({"path": f"{folder}/Film.srt"}, sources)["from_bazarr"] is False
+    assert web.with_source({"path": f"{folder}/Film.srt"}, None)["from_bazarr"] is None

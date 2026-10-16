@@ -394,3 +394,7 @@ ul.files li.unwanted .fname { color: var(--muted); text-decoration: line-through
 input[type="range"] { width: 100%; accent-color: var(--accent); margin: 0.4rem 0 0.2rem; }
 
 .toolbar select.library-select { width: auto; max-width: 100%; }
+.remove-pick { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
+.track.file.bazarr { border-color: var(--ok); }
+.track.file.not-bazarr { border-color: var(--warn); }
+.tag-head .badge { margin-left: 0.4rem; }

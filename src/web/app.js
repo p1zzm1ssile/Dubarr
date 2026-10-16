@@ -166,6 +166,20 @@ function format(t) {
   return name;
 }
 
+// Bazarr's names for the places it downloads subtitles from
+const PROVIDERS = {
+  opensubtitles: "OpenSubtitles.org", opensubtitlescom: "OpenSubtitles.com", subdl: "SubDL", podnapisi: "Podnapisi",
+  addic7ed: "Addic7ed", subf2m: "Subf2m", yifysubtitles: "YIFY Subtitles", gestdown: "Gestdown",
+  embeddedsubtitles: "extracted from the video", whisperai: "Whisper (made by AI)", subsource: "SubSource",
+  animetosho: "AnimeTosho", jimaku: "Jimaku", napiprojekt: "NapiProjekt", supersubtitles: "SuperSubtitles",
+  titulky: "Titulky", subssabbz: "Subs.sab.bz", subsunacs: "Subsunacs", tvsubtitles: "TVsubtitles",
+};
+
+function source(f) {
+  if (f.from_bazarr) return f.source ? `Bazarr, from ${PROVIDERS[f.source] || f.source}` : "Bazarr";
+  return f.from_bazarr === false ? "not from Bazarr" : "";
+}
+
 function trackChips(file) {
   const removed = new Set(file.remove);
   const willForce = new Set(file.mark_forced || []);
@@ -185,10 +199,11 @@ function trackChips(file) {
   }).concat((file.files || []).map((f) => {
     const gone = (file.remove_files || []).includes(f.path);
     const extra = [f.forced && "forced", f.hearing_impaired && "SDH"].filter(Boolean);
+    const from = source(f);
     return el("span", {
-      class: `track sub file${gone ? " removed" : ""}`,
+      class: `track sub file${gone ? " removed" : ""}${f.from_bazarr ? " bazarr" : f.from_bazarr === false ? " not-bazarr" : ""}`,
       title: [f.path.split("/").pop(), f.size ? bytes(f.size) : "", gone ? "will be removed" : "kept"].filter(Boolean).join(" · "),
-      text: `${langName(f.language)} subs · ${f.format.toUpperCase()} file${extra.length ? ` (${extra.join(", ")})` : ""}`,
+      text: `${langName(f.language)} subs · ${f.format.toUpperCase()} file${extra.length ? ` (${extra.join(", ")})` : ""}${from ? ` · ${from}` : ""}`,
     });
   })));
 }
@@ -204,6 +219,8 @@ function languageSelect(current) {
 function tagPanel(file, onSaved) {
   const isMp4 = /\.(mp4|m4v)$/i.test(file.path);
   const selects = {};
+  const removeTrack = {};
+  const removeFile = {};
   const result = el("span", { class: "result", role: "status" });
   const query = (t) => new URLSearchParams({ path: file.path, index: t.index });
 
@@ -232,6 +249,7 @@ function tagPanel(file, onSaved) {
       });
     }
     selects[t.index] = languageSelect(t.language);
+    removeTrack[t.index] = el("input", { type: "checkbox", "aria-label": `Remove track ${t.index}` });
     const details = [t.type === "audio" ? "Audio" : "Subtitles", `track ${t.index}`, t.codec,
       t.channels ? `${t.channels} ch` : "", t.title ? `“${t.title}”` : "",
       t.forced ? "forced" : "", t.commentary ? "commentary" : ""].filter(Boolean).join(" · ");
@@ -239,8 +257,39 @@ function tagPanel(file, onSaved) {
       el("div", { class: "tag-head" },
         el("div", {}, el("strong", { text: details }),
           el("div", { class: "small muted", text: t.language === "und" ? "No language tag" : `Tagged ${langName(t.language)}` })),
-        el("div", { class: "tag-controls" }, button, selects[t.index])),
+        el("div", { class: "tag-controls" }, button, selects[t.index],
+          el("label", { class: "remove-pick" }, removeTrack[t.index], "Remove"))),
       preview);
+  });
+
+  const fileRows = (file.files || []).map((f) => {
+    removeFile[f.path] = el("input", { type: "checkbox", "aria-label": `Remove ${f.path.split("/").pop()}` });
+    const from = source(f);
+    return el("div", { class: "tag-track" },
+      el("div", { class: "tag-head" },
+        el("div", {}, el("strong", { text: `Subtitle file · ${f.path.split("/").pop()}` }),
+          el("div", { class: "small muted" }, `${langName(f.language)} · ${f.format.toUpperCase()}${f.size ? ` · ${bytes(f.size)}` : ""}`,
+            from ? el("span", { class: `badge ${f.from_bazarr ? "ok" : "warn"}`, text: from }) : null)),
+        el("div", { class: "tag-controls" }, el("label", { class: "remove-pick" }, removeFile[f.path], "Remove"))));
+  });
+
+  const remove = el("button", { type: "button", class: "danger", text: "Remove ticked" });
+  remove.addEventListener("click", async () => {
+    const tracks = file.tracks.filter((t) => removeTrack[t.index].checked).map((t) => t.index);
+    const files = (file.files || []).filter((f) => removeFile[f.path].checked).map((f) => f.path);
+    if (!tracks.length && !files.length) { flash(result, false, "Tick Remove on at least one track or file first"); return; }
+    const n = tracks.length + files.length;
+    if (!confirm(`Remove ${n} ticked track${n === 1 ? "" : "s"} and file${n === 1 ? "" : "s"} from ${file.path.split("/").pop()}? `
+      + (tracks.length ? "A copy without them is written and checked, and the original goes to the recycle folder. " : "")
+      + "You can restore from History.")) return;
+    remove.disabled = true;
+    try {
+      flash(result, true, (await post("/api/remove", { path: file.path, tracks, files })).message);
+      setTimeout(onSaved, 1500);
+    } catch (e) {
+      flash(result, false, e.message);
+      remove.disabled = false;
+    }
   });
 
   const save = el("button", { type: "button", class: "primary", text: "Save tags" });
@@ -267,10 +316,12 @@ function tagPanel(file, onSaved) {
 
   return el("div", { class: "tag-panel" },
     el("p", { class: "small muted", text: "Listen to each track or read a few lines, choose its language, and save. "
+      + "Or tick Remove on the tracks and subtitle files you don't want, and press Remove ticked. "
       + (isMp4 ? "MP4 files can't be edited in place, so Dubarr writes a tagged copy and keeps the original in the recycle folder."
         : "The tag is written into the file in a moment, without copying it, so the file won't be flagged again.") }),
     rows,
-    el("div", { class: "card-actions" }, save, result));
+    fileRows,
+    el("div", { class: "card-actions" }, save, remove, result));
 }
 
 async function showDashboard(selected) {
