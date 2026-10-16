@@ -333,3 +333,18 @@ def test_recheck_of_a_deleted_file_removes_it(library, engine):
     broken.unlink()
     engine.scan("manual", [str(broken)])  # what Re-check does
     assert engine.store.file(str(broken)) is None
+
+
+def test_apply_all_in_one_library(library, engine, tmp_path, monkeypatch):
+    anime = tmp_path / "anime"
+    monkeypatch.setattr(config, "library_list", config.library_list + [
+        {"path": str(anime), "audio": ["eng"], "subtitles": ["eng"]}])
+    film = make_video(str(library / "Film" / "Film.mkv"), audio=("eng", "fre"))
+    show = make_video(str(anime / "Show" / "Show.mkv"), audio=("eng", "fre"))
+    engine.scan()
+    total, rows = engine.store.files(statuses=[plans.CHANGE], library=str(anime))
+    assert total == 1 and rows[0]["path"] == show
+
+    engine.apply("manual", force=True, library=str(anime))
+    assert tracks(show, "audio") == ["eng"]
+    assert tracks(film, "audio") == ["eng", "fra"]  # the other library is left for now

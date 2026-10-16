@@ -128,12 +128,13 @@ api("/api/session").then((s) => {
 // ---------- Dashboard ----------
 
 const STATUS_STYLE = {
-  change: "info", seeding: "", no_wanted_audio: "warn", unknown_audio: "warn", unknown_subtitles: "warn", unknown_original: "warn", original_only: "ok", too_small: "",
+  change: "info", not_bazarr: "info", seeding: "", no_wanted_audio: "warn", unknown_audio: "warn", unknown_subtitles: "warn", unknown_original: "warn", original_only: "ok", too_small: "",
   error: "bad", no_audio: "", clean: "ok", ignored: "",
 };
 
 const STATUS_HELP = {
   change: "These have audio or subtitles in languages you don't keep. Apply them here, or turn off Report only in Settings and Dubarr does it by itself.",
+  not_bazarr: "Subtitle files beside films and episodes that Bazarr didn't download, such as ones that came with the download. Remove them here, or choose Remove them by themselves in Settings > Bazarr. They go to the recycle folder, so you can restore them from History.",
   seeding: "Hardlinked files, usually still seeding in your torrent client. Dubarr waits until seeding stops, so the film isn't stored twice.",
   no_wanted_audio: "None of the audio is in a language you keep, so Dubarr leaves these alone. Replace them in Radarr or Sonarr if you want them in your language.",
   unknown_audio: "At least one audio track has no language tag, so Dubarr can't tell what it is and leaves the file alone. Press Listen & tag to hear it and set its language; the tag is written into the file, so it won't come back here.",
@@ -286,6 +287,11 @@ async function showDashboard(selected) {
   const listTitle = el("h2");
   const listHelp = el("p", { class: "muted small" });
   const applyAll = el("button", { type: "button", class: "primary" });
+  // "" for every library, or the one library to list and apply
+  let library = "";
+  const librarySelect = el("select", { "aria-label": "Library", class: "library-select" });
+  librarySelect.addEventListener("change", () => { library = librarySelect.value; labelApplyAll(); loadFiles(false); });
+  let currentCount = 0;
   const table = el("table");
   const more = el("div");
   const listResult = el("span", { class: "result", role: "status" });
@@ -295,7 +301,7 @@ async function showDashboard(selected) {
     notices, activity, stats, tiles,
     el("div", { class: "panel" },
       listTitle, listHelp,
-      el("div", { class: "toolbar" }, el("div", { style: "flex:1;min-width:200px" }, search), applyAll, listResult),
+      el("div", { class: "toolbar" }, el("div", { style: "flex:1;min-width:200px" }, search), librarySelect, applyAll, listResult),
       el("div", { style: "overflow-x:auto" }, table), more));
 
   async function act(path, body, button, done) {
@@ -316,8 +322,8 @@ async function showDashboard(selected) {
     const rows = shown.map((f) => {
       const [folder, name] = splitPath(f.path);
       const actions = [];
-      if ((f.status === "change" || f.status === "too_small") && !f.ignored) {
-        const b = el("button", { type: "button", text: "Apply" });
+      if (["change", "too_small", "not_bazarr"].includes(f.status) && !f.ignored) {
+        const b = el("button", { type: "button", text: f.status === "not_bazarr" ? "Remove" : "Apply" });
         b.addEventListener("click", () => act("/api/apply", { paths: [f.path] }, b));
         actions.push(b);
       }
@@ -325,7 +331,7 @@ async function showDashboard(selected) {
         const b = el("button", { type: "button", text: "Stop leaving alone", title: "Dubarr will deal with it again, like any other file" });
         b.addEventListener("click", () => act("/api/ignore", { path: f.path, ignored: false }, b, () => {}));
         actions.push(b);
-      } else if (!["change", "clean", "too_small"].includes(f.status)) {
+      } else if (!["change", "clean", "too_small", "not_bazarr"].includes(f.status)) {
         const b = el("button", { type: "button", text: "Re-check", title: "Read the file again" });
         b.addEventListener("click", () => act("/api/recheck", { path: f.path }, b));
         actions.push(b);
@@ -364,7 +370,7 @@ async function showDashboard(selected) {
   }
 
   async function loadFiles(append) {
-    const params = new URLSearchParams({ status, search: search.value.trim(), offset: append ? shown.length : 0 });
+    const params = new URLSearchParams({ status, search: search.value.trim(), offset: append ? shown.length : 0, library });
     const r = await api(`/api/files?${params}`);
     shown = append ? shown.concat(r.files) : r.files;
     total = r.total;
@@ -440,14 +446,29 @@ async function showDashboard(selected) {
     const current = d.statuses.find((s) => s.key === status) || pending;
     listTitle.textContent = current.label;
     listHelp.textContent = STATUS_HELP[status] || "";
-    applyAll.hidden = status !== "change" || !current.files;
-    applyAll.textContent = `Apply all ${current.files}`;
+    const paths = d.libraries.map((l) => l.path);
+    if (!paths.includes(library)) library = "";
+    librarySelect.hidden = paths.length < 2;
+    librarySelect.replaceChildren(el("option", { value: "", text: "All libraries", selected: !library }),
+      ...paths.map((p) => el("option", { value: p, text: p, selected: p === library })));
+    currentCount = current.files;
+    applyAll.hidden = !["change", "not_bazarr"].includes(status) || !current.files;
+    labelApplyAll();
     if (!openPanels.size) await loadFiles(false);
   }
 
+  function labelApplyAll() {
+    const verb = status === "not_bazarr" ? "Remove" : "Apply";
+    applyAll.textContent = library ? `${verb} all in ${library}` : `${verb} all ${currentCount}`;
+  }
+
   applyAll.addEventListener("click", () => {
-    if (!confirm(`Remove the unwanted tracks from all ${total} file(s) now? Originals go to the recycle folder, so you can restore them from History.`)) return;
-    act("/api/apply", {}, applyAll);
+    const what = library ? `every file in ${library}` : `all ${currentCount} file(s)`;
+    const question = status === "not_bazarr"
+      ? `Remove the subtitle files Bazarr didn't download from ${what} now? They go to the recycle folder, so you can restore them from History.`
+      : `Remove the unwanted tracks from ${what} now? Originals go to the recycle folder, so you can restore them from History.`;
+    if (!confirm(question)) return;
+    act("/api/apply", { library: library || null, status }, applyAll);
   });
 
   let timer;

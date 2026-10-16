@@ -89,6 +89,12 @@ def _default_libraries():
     return libraries
 
 
+# Subtitle files Bazarr didn't download
+OTHER_SUBTITLES_KEEP = "Keep them"
+OTHER_SUBTITLES_LIST = "List them for me to remove"
+OTHER_SUBTITLES_AUTO = "Remove them by themselves"
+
+
 def F(key, tab, label, type, default, help="", section="", group=None, **extra):
     """Describe one setting. type is bool, int, text, secret, select, labels, languages or libraries."""
     return dict(key=key, tab=tab, label=label, type=type, default=default, help=help,
@@ -239,6 +245,16 @@ FIELDS = [
       env_bool("BAZARR_SEARCH_MISSING", default=True), section="What Bazarr does",
       help="When a change leaves a film with no subtitles in your languages (say it only had French ones), Bazarr "
            "is asked to search for them."),
+    F("bazarr_other_subtitles", "bazarr", "Subtitle files Bazarr didn't download", "select",
+      {"list": OTHER_SUBTITLES_LIST, "auto": OTHER_SUBTITLES_AUTO}.get(
+          env_str("BAZARR_OTHER_SUBTITLES", default="").strip().lower(), OTHER_SUBTITLES_KEEP),
+      section="What Bazarr does",
+      options=[OTHER_SUBTITLES_KEEP, OTHER_SUBTITLES_LIST, OTHER_SUBTITLES_AUTO],
+      help="Only for films and series Bazarr looks after: any subtitle file beside them that isn't in Bazarr's history "
+           "(one that came with the download, say) goes to the recycle folder, whatever its language. List them puts "
+           "them on the Dashboard under \"Subtitles not from Bazarr\" for you to remove. Remove them by themselves "
+           "does it about every 10 minutes, even with Report only on. Nothing is removed while Bazarr's history is "
+           "empty or Bazarr can't be reached."),
 ]
 
 def with_scheme(url):

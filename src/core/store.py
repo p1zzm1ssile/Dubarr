@@ -120,8 +120,11 @@ class Store:
         marks = ",".join("?" * len(keep)) or "''"
         self._run(f"DELETE FROM files WHERE library NOT IN ({marks})", tuple(keep))
 
-    def files(self, statuses=None, ignored=None, search="", limit=500, offset=0):
+    def files(self, statuses=None, ignored=None, search="", limit=500, offset=0, library=None):
         sql, args = "SELECT * FROM files WHERE 1=1", []
+        if library:
+            sql += " AND library = ?"
+            args.append(library)
         if statuses:
             sql += f" AND status IN ({','.join('?' * len(statuses))})"
             args += list(statuses)

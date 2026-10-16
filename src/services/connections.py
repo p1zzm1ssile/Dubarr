@@ -1,12 +1,13 @@
 """Radarr, Sonarr, Bazarr and Jellyfin: tell them to look at a file again after Dubarr changes it."""
 
+import posixpath
 import threading
 import time
 
 import requests
 
 from utils.languages import UNDEFINED, normalise
-from utils.paths import inside, to_remote
+from utils.paths import inside, to_local, to_remote
 
 CACHE_SECONDS = 600
 
@@ -128,6 +129,9 @@ def original_language(item):
     return None if code == UNDEFINED else code
 
 
+BAZARR_DELETED = 0  # the action in Bazarr's history for a subtitle it deleted
+
+
 class Bazarr:
     """Bazarr knows films by their Radarr id and series by their Sonarr id, so Dubarr finds those first:
     through Radarr or Sonarr when they're connected, otherwise from Bazarr's own list."""
@@ -173,6 +177,26 @@ class Bazarr:
                 items = self._data(self._request("GET", f"/{kind}", {"start": 0, "length": -1})) or []
                 self._lists[kind] = (time.time(), items)
             return items
+
+    def downloaded_subtitles(self):
+        """The subtitle files Bazarr downloaded, as Dubarr's paths, from Bazarr's history: downloaded, upgraded,
+        uploaded, synced, translated or extracted. One whose latest entry says Bazarr deleted it isn't counted.
+        Empty if Bazarr's history is empty."""
+        with self._lock:
+            loaded, files = self._lists.get("history", (0, None))
+            if files is not None and time.time() - loaded <= CACHE_SECONDS:
+                return files
+        latest = {}
+        for kind in ("movies", "episodes"):
+            # Newest first
+            for entry in self._data(self._request("GET", f"/{kind}/history", {"start": 0, "length": -1})) or []:
+                if entry.get("subtitles_path"):
+                    path = posixpath.normpath(to_local(entry["subtitles_path"].replace("\\", "/"), self.paths))
+                    latest.setdefault(path, entry.get("action"))
+        files = frozenset(path for path, action in latest.items() if action != BAZARR_DELETED)
+        with self._lock:
+            self._lists["history"] = (time.time(), files)
+        return files
 
     def locate(self, local_path):
         """("movie", Radarr id) or ("series", Sonarr id) for a file, from Bazarr's own lists, or None."""

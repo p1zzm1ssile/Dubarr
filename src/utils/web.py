@@ -17,7 +17,7 @@ import utils.auth as auth
 import utils.config as config
 import utils.status as status
 from core import plan as plans
-from core.engine import ERROR, SEEDING, TOO_SMALL, Busy, in_window
+from core.engine import ERROR, NOT_BAZARR, SEEDING, TOO_SMALL, Busy, in_window
 from core.swap import SwapError
 from core.tagging import TagError, audio_sample, subtitle_lines
 from services.connections import Arr, Bazarr, Jellyfin, ServiceError, webhook_paths
@@ -46,6 +46,7 @@ SECURITY_HEADERS = {
 # The order the Dashboard lists them in
 STATUSES = {
     plans.CHANGE: "Will be changed",
+    NOT_BAZARR: "Subtitles not from Bazarr",
     SEEDING: "Waiting for seeding to stop",
     TOO_SMALL: "Not worth rewriting",
     plans.NO_WANTED_AUDIO: "No wanted audio",
@@ -312,7 +313,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(200, {"ok": True, "message": "Scan started"})
                 if path == "/api/apply":
                     paths = data.get("paths") or None
-                    engine.background(engine.apply, "manual", paths, True)
+                    library = data.get("library") or None
+                    if library and library not in [lib["path"] for lib in config.library_list]:
+                        raise ValueError("That library isn't set up in Dubarr")
+                    status = NOT_BAZARR if data.get("status") == NOT_BAZARR else None
+                    engine.background(engine.apply, "manual", paths, True, library=library, status=status)
                     return self.send(200, {"ok": True, "message": "Changing files"})
                 if path == "/api/stop":
                     engine.stop()
@@ -396,10 +401,12 @@ def files(query):
     except ValueError:
         offset = 0
     search = query.get("search", "")[:200]
+    library = query.get("library") or None
     if wanted == "ignored":
-        total, rows = engine.store.files(ignored=True, search=search, offset=offset, limit=200)
+        total, rows = engine.store.files(ignored=True, search=search, offset=offset, limit=200, library=library)
     else:
-        total, rows = engine.store.files(statuses=[wanted], ignored=False, search=search, offset=offset, limit=200)
+        total, rows = engine.store.files(statuses=[wanted], ignored=False, search=search, offset=offset, limit=200,
+                                         library=library)
     out = []
     for r in rows:
         info = r["info"] or {}

@@ -19,6 +19,8 @@ The rules:
   * Subtitle files beside the video (Film.fr.srt) in languages you don't keep are
     removed too. That's just a file delete, no rewrite. Files whose name doesn't
     say a language are kept.
+  * With bazarr_files (the subtitle files Bazarr downloaded, for a film Bazarr knows),
+    every other subtitle file beside the video is removed, whatever its language.
   * Duplicates (both can be turned off), picked for Jellyfin:
       audio: keep the best-quality track per wanted language. Jellyfin converts
       audio on the fly for devices that can't play it, which is cheap, so a
@@ -28,6 +30,7 @@ The rules:
       normal beats SDH.
 """
 
+import posixpath
 from dataclasses import dataclass, field
 
 from core.probe import MediaInfo
@@ -42,6 +45,8 @@ UNKNOWN_SUBTITLES = "unknown_subtitles"  # nothing to remove, but a subtitle tra
 UNKNOWN_ORIGINAL = "unknown_original"  # audio is kept only because the original language isn't known
 ORIGINAL_ONLY = "original_only"    # none of your languages, but the original is there and kept (Japanese-only anime)
 CLEAN = "clean"                    # only wanted tracks, nothing to do
+
+NOT_FROM_BAZARR = "Not downloaded by Bazarr"  # the reason given for a subtitle file Bazarr didn't download
 
 WARNINGS = (NO_WANTED_AUDIO, UNKNOWN_AUDIO, NO_AUDIO, UNKNOWN_SUBTITLES, UNKNOWN_ORIGINAL)
 
@@ -60,6 +65,7 @@ class Rules:
     prefer_text_files: bool = False
     keep_original_audio: bool = False
     original_language: str = None  # for this file, from Radarr or Sonarr; None if they don't know
+    bazarr_files: frozenset = None  # subtitle files Bazarr downloaded, to keep only those; None to not check
 
 
 def original_language(info: MediaInfo, rules: Rules):
@@ -114,6 +120,23 @@ def _file_languages(files):
         if f["language"] not in seen:
             seen.append(f["language"])
     return seen
+
+
+def _files_text(remove_files):
+    """["2 French subtitle files", "1 subtitle file Bazarr didn't download"]"""
+    parts = []
+    by_language = [f for f in remove_files if f["reason"] != NOT_FROM_BAZARR]
+    if by_language:
+        n = len(by_language)
+        parts.append(f"{n} {describe(_file_languages(by_language))} subtitle file{'s' if n > 1 else ''}")
+    n = len(remove_files) - len(by_language)
+    if n:
+        parts.append(f"{n} subtitle file{'s' if n > 1 else ''} Bazarr didn't download")
+    return parts
+
+
+def _join(parts):
+    return ", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1 else parts[0]
 
 
 def _removal(track, reason):
@@ -301,6 +324,11 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
         for f in info.external:
             if f["language"] not in rules.subtitle_languages and f["language"] not in (UNDEFINED, MULTIPLE, NO_LANGUAGE):
                 remove_files.append({**f, "reason": "Unwanted subtitle file"})
+    if rules.bazarr_files is not None:
+        removing = {f["path"] for f in remove_files}
+        for f in info.external:
+            if f["path"] not in removing and posixpath.normpath(f["path"]) not in rules.bazarr_files:
+                remove_files.append({**f, "reason": NOT_FROM_BAZARR})
 
     untagged_subs = [t for t in subtitles if t.language == UNDEFINED]
     if not remove and not remove_files:
@@ -319,8 +347,7 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
     removed = {r["index"] for r in remove}
     keep = [i for i in every if i not in removed]
     if not remove:
-        n = len(remove_files)
-        message = f"Remove {n} {describe(_file_languages(remove_files))} subtitle file{'s' if n > 1 else ''}"
+        message = "Remove " + _join(_files_text(remove_files))
         return Plan(CHANGE, message + (f". {original_only}" if original_only else ""),
                     keep=keep, remove_files=remove_files, original_only=original if original_only else None)
 
@@ -366,10 +393,8 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
     if picture:
         parts.append(f"{picture} picture subtitle track{'s' if picture > 1 else ''} (a text file replaces "
                      f"{'them' if picture > 1 else 'it'})")
-    if remove_files:
-        n = len(remove_files)
-        parts.append(f"{n} {describe(_file_languages(remove_files))} subtitle file{'s' if n > 1 else ''}")
-    text = ", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1 else parts[0]
+    parts += _files_text(remove_files)
+    text = _join(parts)
     if unsure_note:
         text += f". {unsure_note}"
     if original_only:

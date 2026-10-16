@@ -320,6 +320,22 @@ def test_files_and_tracks_together():
     assert not files_only.rewrites and len(files_only.remove_files) == 1
 
 
+def test_only_subtitle_files_bazarr_downloaded_are_kept():
+    info = media(VIDEO, audio("eng"), sub("eng"))
+    info.external = [sidecar("eng"), sidecar("fra"), sidecar("und")]
+    # Bazarr downloaded the English file: the untagged one goes too, and French once, for its language
+    p = decide(info, Rules(["eng"], ["eng"], bazarr_files=frozenset({"/m/film.eng.srt"})))
+    assert p.status == plans.CHANGE and not p.rewrites
+    assert [(f["language"], f["reason"]) for f in p.remove_files] == [
+        ("fra", "Unwanted subtitle file"), ("und", plans.NOT_FROM_BAZARR)]
+    assert p.message == "Remove 1 French subtitle file and 1 subtitle file Bazarr didn't download"
+    # Without Bazarr's list (off, or Bazarr doesn't know the film), nothing changes
+    assert [f["language"] for f in decide(info, ENGLISH).remove_files] == ["fra"]
+    # Tracks inside the film aren't Bazarr's to judge
+    info = media(VIDEO, audio("eng"), sub("eng"), sub("eng", forced=True))
+    assert decide(info, Rules(["eng"], ["eng"], bazarr_files=frozenset())).status == plans.CLEAN
+
+
 def test_picture_subtitles_go_when_a_text_file_is_beside_the_film():
     info = media(VIDEO, audio("eng"), sub("eng", codec="hdmv_pgs_subtitle", frames=1500),
                  sub("eng", codec="hdmv_pgs_subtitle", forced=True, frames=20))

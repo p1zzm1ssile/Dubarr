@@ -13,7 +13,7 @@ from contextlib import contextmanager
 import utils.config as config
 from core import plan as plans
 from core import swap, tagging
-from core.plan import Rules, decide
+from core.plan import NOT_FROM_BAZARR, Plan, Rules, decide
 from core.probe import PROBE_VERSION, MediaInfo, ProbeError, find_sidecars, probe
 from core.remux import RemuxError, remux, supported
 from core.store import Store
@@ -26,6 +26,7 @@ from utils.paths import inside
 SEEDING = "seeding"   # would change, but it's hardlinked and probably still seeding
 TOO_SMALL = "too_small"  # would change, but would save less than the minimum set
 ERROR = "error"       # couldn't be read or changed
+NOT_BAZARR = "not_bazarr"  # only subtitle files Bazarr didn't download to remove
 
 APPLY_EVERY_SECONDS = 600
 
@@ -136,6 +137,7 @@ class Engine:
         self.last_scan = 0.0
         self.last_apply = 0.0
         self.last_purge = 0.0
+        self.last_subtitles = 0.0
         self._services = {}
         self._unreachable = {}  # Radarr, Sonarr or Jellyfin: when to try asking them again
 
@@ -202,7 +204,25 @@ class Engine:
         return Rules(library["audio"], library["subtitles"], config.strip_audio, config.strip_subtitles,
                      config.strip_commentary, config.one_audio_per_language, config.one_subtitle_per_language,
                      config.assume_unlabelled_is_full, config.strip_subtitle_files, config.prefer_text_files,
-                     config.keep_original_audio, self.original_language(path) if path else None)
+                     config.keep_original_audio, self.original_language(path) if path else None,
+                     self.bazarr_files(path) if path else None)
+
+    def bazarr_files(self, path):
+        """The subtitle files Bazarr downloaded, when Dubarr is to keep only those and Bazarr looks after this film
+        or series. None otherwise, including when Bazarr's history is empty: then there's no telling which are its."""
+        if config.bazarr_other_subtitles == config.OTHER_SUBTITLES_KEEP:
+            return None
+        bazarr = self._service("bazarr")
+        if not bazarr or time.time() < self._unreachable.get("bazarr", 0):
+            return None
+        try:
+            if not bazarr.locate(path):
+                return None
+            return bazarr.downloaded_subtitles() or None
+        except ServiceError as e:
+            logger.warning(f"Couldn't ask Bazarr which subtitles it downloaded: {e}. Trying again in 10 minutes")
+            self._unreachable["bazarr"] = time.time() + 600
+            return None
 
     def original_language(self, path):
         """The original language of a file's film or series, from Radarr or Sonarr. None if neither knows,
@@ -301,6 +321,10 @@ class Engine:
                 if files_only.remove_files:
                     status, plan = plans.CHANGE, files_only
                     message = f"{files_only.message}. The rest waits: {waiting[0].lower()}{waiting[1:]}"
+        # Only subtitle files Bazarr didn't download: their own list, removed by hand or by their own setting
+        if (status == plans.CHANGE and not plan.rewrites and plan.remove_files
+                and all(f["reason"] == NOT_FROM_BAZARR for f in plan.remove_files)):
+            status = NOT_BAZARR
         return status, message, plan, info, st
 
     def check_file(self, library, path, reread=False):
@@ -372,23 +396,27 @@ class Engine:
 
     # Changing files
 
-    def apply(self, trigger="manual", paths=None, force=False, wait=False):
+    def apply(self, trigger="manual", paths=None, force=False, wait=False, library=None, status=None):
         """Change files waiting to be changed.
 
         Automatic passes respect report-only mode, the time window and the batch size.
-        force is for the Apply buttons, where you've chosen the files yourself.
+        force is for the Apply buttons, where you've chosen the files yourself. library limits it to one library,
+        and status NOT_BAZARR to that list instead of the files waiting to be changed.
         """
         if not force and (config.report_only or not in_window(config.active_from, config.active_until)):
             return
         with self.job("Changing files", wait=wait):
             self.last_apply = time.time()
-            statuses = [plans.CHANGE] + ([SEEDING] if config.process_hardlinked else [])
-            if paths and force:
-                statuses.append(TOO_SMALL)  # chosen by hand, so worth it
+            if status == NOT_BAZARR:
+                statuses = [NOT_BAZARR]
+            else:
+                statuses = [plans.CHANGE] + ([SEEDING] if config.process_hardlinked else [])
+                if paths and force:
+                    statuses += [TOO_SMALL, NOT_BAZARR]  # chosen by hand, so worth it
             if paths:
                 rows = [r for r in (self.store.file(p) for p in paths) if r and r["status"] in statuses and not r["ignored"]]
             else:
-                _, rows = self.store.files(statuses=statuses, ignored=False, limit=1_000_000)
+                _, rows = self.store.files(statuses=statuses, ignored=False, limit=1_000_000, library=library)
                 if not force:
                     rows = rows[:config.max_changes_per_pass]
             if not rows:
@@ -407,7 +435,7 @@ class Engine:
                     working.append(os.path.basename(row["path"]))
                     self.activity["detail"] = ", ".join(working)
                 try:
-                    result = self.change_file(run_id, row["path"], allow_small=bool(paths and force))
+                    result = self.change_file(run_id, row["path"], allow_small=bool(paths and force), by_hand=force)
                 finally:
                     with lock:
                         working.remove(os.path.basename(row["path"]))
@@ -438,8 +466,11 @@ class Engine:
                            + (f". {failed} couldn't be changed, see the Dashboard" if failed else ""))
             self.purge()
 
-    def change_file(self, run_id, path, allow_small=False):
-        """Strip one file. Returns bytes saved, False on failure, or None if there was nothing to do."""
+    def change_file(self, run_id, path, allow_small=False, by_hand=False, subtitles_only=False):
+        """Strip one file. Returns bytes saved, False on failure, or None if there was nothing to do.
+
+        by_hand is for files you chose to apply. subtitles_only removes just the subtitle files Bazarr didn't
+        download, leaving the rest of the change for later."""
         library = self.library_for(path)
         if not library:
             return None
@@ -448,9 +479,24 @@ class Engine:
             status, _, plan, info, st = self.evaluate(library, path, reread=True, allow_small=allow_small)
         except OSError:
             return None
-        if status != plans.CHANGE and not (status == SEEDING and config.process_hardlinked):
-            self.check_file(library, path)
-            return None
+        if subtitles_only:
+            others = [f for f in (plan.remove_files if plan else []) if f["reason"] == NOT_FROM_BAZARR]
+            if not others:
+                self.check_file(library, path)
+                return None
+            plan = Plan(plans.CHANGE, "", remove_files=others)
+        else:
+            allowed = (status == plans.CHANGE or (status == SEEDING and config.process_hardlinked)
+                       or (status == NOT_BAZARR and by_hand))
+            if not allowed:
+                self.check_file(library, path)
+                return None
+            # Subtitles Bazarr didn't download only go by themselves when that's chosen in Settings
+            if not by_hand and config.bazarr_other_subtitles != config.OTHER_SUBTITLES_AUTO:
+                plan.remove_files = [f for f in plan.remove_files if f["reason"] != NOT_FROM_BAZARR]
+                if not plan.rewrites and not plan.remove_files:
+                    self.check_file(library, path)
+                    return None
 
         root = swap.recycle_root(library["path"], config.recycle_folder)
         saved = 0
@@ -462,10 +508,15 @@ class Engine:
                 saved += info.size - new.size
                 logger.log("ACTION", f"{plan.message} from {path} (saved {size(info.size - new.size)}, change #{history_id})")
             for f in plan.remove_files:
-                message = f"Removed the {name(f['language'])} subtitle file beside the film"
+                if f["reason"] == NOT_FROM_BAZARR:
+                    message, why = "Removed a subtitle file beside the film that Bazarr didn't download", \
+                        "Bazarr didn't download it"
+                else:
+                    message = f"Removed the {name(f['language'])} subtitle file beside the film"
+                    why = f"{name(f['language'])} subtitles"
                 history_id = swap.recycle_file(self.store, run_id, f["path"], path, message, root, config.recycle_days)
                 saved += f["size"]
-                logger.log("ACTION", f"Removed {f['path']} ({name(f['language'])} subtitles, change #{history_id})")
+                logger.log("ACTION", f"Removed {f['path']} ({why}, change #{history_id})")
         except (RemuxError, swap.SwapError, OSError) as e:
             reason = getattr(e, "strerror", None) or str(e)
             logger.error(f"Couldn't change {path}: {reason}. The original is untouched")
@@ -477,6 +528,36 @@ class Engine:
         self.check_file(library, path, reread=True)
         self.notify(path)
         return saved
+
+    def remove_other_subtitles(self, trigger="scheduled", wait=False):
+        """Remove the subtitle files Bazarr didn't download, from every file that has some, without changing the
+        rest of a file that waits to be changed. Report only doesn't stop it: you turned it on separately."""
+        with self.job("Removing subtitles Bazarr didn't download", wait=wait):
+            self.last_subtitles = time.time()
+            _, rows = self.store.files(statuses=[plans.CHANGE, SEEDING, TOO_SMALL, NOT_BAZARR], ignored=False,
+                                       limit=1_000_000)
+            rows = [r for r in rows if any(f.get("reason") == NOT_FROM_BAZARR
+                                           for f in (r["plan"] or {}).get("remove_files", []))]
+            if not rows:
+                return
+            self.activity["total"] = len(rows)
+            run_id = self.store.start_run(trigger)
+            changed = failed = saved = 0
+            for row in rows:
+                if self._stop.is_set():
+                    break
+                self.activity["detail"] = row["path"]
+                result = self.change_file(run_id, row["path"], subtitles_only=True)
+                if result is False:
+                    failed += 1
+                elif result is not None:
+                    changed += 1
+                    saved += result
+                self.activity["done"] += 1
+            self.store.finish_run(run_id, changed, failed, saved)
+            if changed or failed:
+                logger.log("ACTION", f"Removed subtitles Bazarr didn't download from {changed} film(s) or episode(s)"
+                           + (f". {failed} couldn't be changed, see the Dashboard" if failed else ""))
 
     # Restoring
 
@@ -667,6 +748,9 @@ class Engine:
                 self.scan("scheduled")
             if now - self.last_apply >= APPLY_EVERY_SECONDS:
                 self.apply("scheduled")
+            if (config.bazarr_other_subtitles == config.OTHER_SUBTITLES_AUTO
+                    and now - self.last_subtitles >= APPLY_EVERY_SECONDS):
+                self.remove_other_subtitles("scheduled")
             if now - self.last_purge >= 24 * 3600:
                 with self.job("Emptying the recycle folder"):
                     self.purge()
