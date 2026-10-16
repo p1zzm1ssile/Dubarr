@@ -178,25 +178,32 @@ class Bazarr:
                 self._lists[kind] = (time.time(), items)
             return items
 
-    def downloaded_subtitles(self):
-        """The subtitle files Bazarr downloaded, as Dubarr's paths, from Bazarr's history: downloaded, upgraded,
-        uploaded, synced, translated or extracted. One whose latest entry says Bazarr deleted it isn't counted.
-        Empty if Bazarr's history is empty."""
+    def subtitle_sources(self):
+        """{subtitle file Bazarr downloaded, as Dubarr's path: the provider it came from, e.g. "opensubtitlescom"},
+        from Bazarr's history: downloaded, upgraded, uploaded, synced, translated or extracted. One whose latest
+        entry says Bazarr deleted it isn't counted. Empty if Bazarr's history is empty."""
         with self._lock:
-            loaded, files = self._lists.get("history", (0, None))
-            if files is not None and time.time() - loaded <= CACHE_SECONDS:
-                return files
-        latest = {}
+            loaded, sources = self._lists.get("history", (0, None))
+            if sources is not None and time.time() - loaded <= CACHE_SECONDS:
+                return sources
+        latest, providers = {}, {}
         for kind in ("movies", "episodes"):
             # Newest first
             for entry in self._data(self._request("GET", f"/{kind}/history", {"start": 0, "length": -1})) or []:
                 if entry.get("subtitles_path"):
                     path = posixpath.normpath(to_local(entry["subtitles_path"].replace("\\", "/"), self.paths))
                     latest.setdefault(path, entry.get("action"))
-        files = frozenset(path for path, action in latest.items() if action != BAZARR_DELETED)
+                    # A sync or translation keeps the provider of the download it started from
+                    if entry.get("provider") and entry.get("action") != BAZARR_DELETED:
+                        providers.setdefault(path, entry["provider"])
+        sources = {path: providers.get(path, "") for path, action in latest.items() if action != BAZARR_DELETED}
         with self._lock:
-            self._lists["history"] = (time.time(), files)
-        return files
+            self._lists["history"] = (time.time(), sources)
+        return sources
+
+    def downloaded_subtitles(self):
+        """The subtitle files Bazarr downloaded, as Dubarr's paths. Empty if Bazarr's history is empty."""
+        return frozenset(self.subtitle_sources())
 
     def locate(self, local_path):
         """("movie", Radarr id) or ("series", Sonarr id) for a file, from Bazarr's own lists, or None."""

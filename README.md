@@ -32,6 +32,8 @@ Video, chapters, fonts and anything that isn't audio or subtitles is always kept
 
 **Untagged tracks:** press *Listen & tag* on the Dashboard to hear a 30-second sample of an audio track, or read a few lines of a subtitle track, then choose its language. Dubarr writes the tag into the file (MKV files in place, in a moment), so it isn't flagged again. Picture-based subtitles (Blu-ray PGS) can't be shown as text. Files that are still seeding aren't tagged, as that would change the torrent's data.
 
+**Removing a track by hand:** press *Check tracks* on the Dashboard, tick *Remove* on any audio or subtitle track, or subtitle file, and press *Remove ticked*. With Bazarr connected, each subtitle file says whether Bazarr downloaded it, and from where (OpenSubtitles.com, say).
+
 **One library at a time:** with more than one library, pick one next to *Apply all* on the Dashboard to list and apply just its files.
 
 Languages are set once for everything, and can be overridden per library, e.g. Japanese + English audio for an anime folder.

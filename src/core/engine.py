@@ -13,7 +13,7 @@ from contextlib import contextmanager
 import utils.config as config
 from core import plan as plans
 from core import swap, tagging
-from core.plan import NOT_FROM_BAZARR, Plan, Rules, decide
+from core.plan import NOT_FROM_BAZARR, Plan, Rules, _removal, decide
 from core.probe import PROBE_VERSION, MediaInfo, ProbeError, find_sidecars, probe
 from core.remux import RemuxError, remux, supported
 from core.store import Store
@@ -558,6 +558,100 @@ class Engine:
             if changed or failed:
                 logger.log("ACTION", f"Removed subtitles Bazarr didn't download from {changed} film(s) or episode(s)"
                            + (f". {failed} couldn't be changed, see the Dashboard" if failed else ""))
+
+    # Removing tracks by hand
+
+    def plan_by_hand(self, path, indexes, files):
+        """A change made of the tracks and subtitle files you ticked. Returns (library, info, plan).
+        Raises ValueError (or TagError) if the choice can't be made."""
+        library = self.library_for(path)
+        if not library:
+            raise ValueError("This file isn't in a library set up in Dubarr")
+        info = self.known_file(path)
+        by_index = {t.index: t for t in info.tracks}
+        tracks = []
+        for index in dict.fromkeys(int(i) for i in indexes):
+            track = by_index.get(index)
+            if not track or track.type not in ("audio", "subtitle"):
+                raise ValueError(f"Track {index} isn't an audio or subtitle track")
+            tracks.append(track)
+        beside = {f["path"]: f for f in find_sidecars(path)}
+        chosen = []
+        for file in dict.fromkeys(files):
+            if file not in beside:
+                raise ValueError(f"{os.path.basename(file)} isn't a subtitle file beside this film any more")
+            chosen.append({**beside[file], "reason": "Removed by hand"})
+        if not tracks and not chosen:
+            raise ValueError("Tick at least one track or subtitle file to remove")
+
+        removed = {t.index for t in tracks}
+        audio_left = [t for t in info.of("audio") if t.index not in removed]
+        if info.of("audio") and not audio_left:
+            raise ValueError("At least one audio track has to stay")
+        if tracks and os.stat(path).st_nlink > 1 and not config.process_hardlinked:
+            raise ValueError("The file is hardlinked, probably still seeding. Removing tracks would store the film "
+                             "twice. Try again once seeding stops, or remove only subtitle files")
+        default_audio = None
+        if tracks and not any(t.default for t in audio_left):
+            default_audio = audio_left[0].index
+
+        parts = [f"{name(t.language)} {'audio' if t.type == 'audio' else 'subtitles'}" for t in tracks]
+        if chosen:
+            parts.append(f"{len(chosen)} subtitle file{'s' if len(chosen) > 1 else ''}")
+        message = "Removed by hand: " + (", ".join(parts[:-1]) + " and " + parts[-1] if len(parts) > 1 else parts[0])
+        plan = Plan(plans.CHANGE, message, remove=[_removal(t, "Removed by hand") for t in tracks],
+                    keep=[t.index for t in info.tracks if t.index not in removed], default_audio=default_audio,
+                    saved_bytes=sum(t.size for t in tracks), remove_files=chosen)
+        return library, info, plan
+
+    def remove_by_hand(self, path, indexes, files, wait=False):
+        """Remove the tracks and subtitle files you ticked from one film, the same safe way as any change:
+        a checked copy, with the original in the recycle folder."""
+        with self.job("Removing tracks", wait=wait):
+            self.activity["detail"] = path
+            library = self.library_for(path)
+            if library:
+                # Read the file again, in case it changed since the Dashboard showed it
+                self.check_file(library, path, reread=True)
+            library, info, plan = self.plan_by_hand(path, indexes, files)
+            root = swap.recycle_root(library["path"], config.recycle_folder)
+            run_id = self.store.start_run("manual")
+            saved = 0
+            try:
+                if plan.rewrites:
+                    new = remux(info, plan)
+                    history_id = swap.swap(self.store, run_id, path, info.size, new.size, plan.message, plan.remove,
+                                           root, config.recycle_days)
+                    saved += info.size - new.size
+                    logger.log("ACTION", f"{plan.message} from {path} (saved {size(info.size - new.size)}, "
+                                         f"change #{history_id})")
+                for f in plan.remove_files:
+                    history_id = swap.recycle_file(self.store, run_id, f["path"], path,
+                                                   "Removed a subtitle file beside the film by hand", root,
+                                                   config.recycle_days)
+                    saved += f["size"]
+                    logger.log("ACTION", f"Removed {f['path']} by hand (change #{history_id})")
+            except (RemuxError, swap.SwapError, OSError) as e:
+                logger.error(f"Couldn't remove tracks from {path}: {getattr(e, 'strerror', None) or e}. "
+                             "The original is untouched")
+                self.store.finish_run(run_id, 0, 1, 0)
+                return
+            self.store.finish_run(run_id, 1, 0, saved)
+            self.check_file(library, path, reread=True)
+            self.notify(path)
+
+    def subtitle_sources(self):
+        """{subtitle file: provider} for the subtitle files Bazarr downloaded, or None when Bazarr isn't connected,
+        can't be reached or its history is empty."""
+        bazarr = self._service("bazarr")
+        if not bazarr or time.time() < self._unreachable.get("bazarr", 0):
+            return None
+        try:
+            return bazarr.subtitle_sources() or None
+        except ServiceError as e:
+            logger.warning(f"Couldn't ask Bazarr which subtitles it downloaded: {e}. Trying again in 10 minutes")
+            self._unreachable["bazarr"] = time.time() + 600
+            return None
 
     # Restoring
 
