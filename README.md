@@ -25,11 +25,14 @@ It's built to be safe to leave running:
 | Commentary tracks | Removes them (can be turned off) |
 | Several audio tracks in one language | Keeps the best-quality one (can be turned off) |
 | Subtitle files beside the film (Film.fr.srt) in other languages | Removes them, no rewrite needed (can be turned off) |
+| Subtitle files beside the film that Bazarr didn't download | Keeps them, or lists or removes them if you choose (Settings > Bazarr) |
 | Several subtitle tracks in one language | Keeps one full track, preferring text (SRT) and normal over SDH, plus the forced one (can be turned off) |
 
 Video, chapters, fonts and anything that isn't audio or subtitles is always kept. Subtitles with no language tag are always kept. Forced subtitles in your languages are kept; forced subtitles in other languages are removed. A "multiple languages" audio track counts as wanted.
 
 **Untagged tracks:** press *Listen & tag* on the Dashboard to hear a 30-second sample of an audio track, or read a few lines of a subtitle track, then choose its language. Dubarr writes the tag into the file (MKV files in place, in a moment), so it isn't flagged again. Picture-based subtitles (Blu-ray PGS) can't be shown as text. Files that are still seeding aren't tagged, as that would change the torrent's data.
+
+**One library at a time:** with more than one library, pick one next to *Apply all* on the Dashboard to list and apply just its files.
 
 Languages are set once for everything, and can be overridden per library, e.g. Japanese + English audio for an anime folder.
 
@@ -62,6 +65,8 @@ Every setting is in the web UI. To pre-fill them on first start, see `.env.tmpl`
 All optional, under Settings:
 
 - **Bazarr:** after a change, Bazarr looks at the film again straight away, and searches for subtitles if the change left none in your languages. Dubarr also warns when a Bazarr language profile downloads a language Dubarr removes. Let Bazarr be the only thing downloading subtitles: in each Jellyfin library, untick every language under **Subtitle downloads**.
+
+- **Only Bazarr's subtitles:** Settings > Bazarr > *Subtitle files Bazarr didn't download* can list subtitle files beside your films that Bazarr didn't download (ones that came with the release, say), for you to remove from the Dashboard, or remove them by themselves. Bazarr's history says which are its own; anything Bazarr doesn't look after is left alone.
 
 - **Rescans:** add the address and API key, and Dubarr asks them to rescan each file it changes.
 - **Check new imports straight away:** in Radarr or Sonarr, Settings > Connect > + > Webhook, tick *On Import* and *On Upgrade*, method POST, and paste the address shown on Dubarr's Radarr or Sonarr settings tab. Without it, new files are picked up at the next scheduled scan.
