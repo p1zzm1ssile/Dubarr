@@ -5,6 +5,7 @@ import hmac
 import io
 import json
 import os
+import posixpath
 import re
 import time
 import zipfile
@@ -319,6 +320,18 @@ class Handler(BaseHTTPRequestHandler):
                     status = NOT_BAZARR if data.get("status") == NOT_BAZARR else None
                     engine.background(engine.apply, "manual", paths, True, library=library, status=status)
                     return self.send(200, {"ok": True, "message": "Changing files"})
+                if path == "/api/remove":
+                    file, tracks, files = data.get("path", ""), data.get("tracks") or [], data.get("files") or []
+                    if not isinstance(tracks, list) or not isinstance(files, list):
+                        raise ValueError("tracks and files must be lists")
+                    try:
+                        tracks = [int(t) for t in tracks]
+                    except (TypeError, ValueError):
+                        raise ValueError("tracks must be track numbers")
+                    files = [str(f) for f in files]
+                    engine.plan_by_hand(file, tracks, files)  # says straight away if the choice can't be made
+                    engine.background(engine.remove_by_hand, file, tracks, files)
+                    return self.send(200, {"ok": True, "message": "Removing them. It shows under History when it's done"})
                 if path == "/api/stop":
                     engine.stop()
                     return self.send(200, {"ok": True, "message": "Stopping after the current file"})
@@ -408,6 +421,7 @@ def files(query):
         total, rows = engine.store.files(statuses=[wanted], ignored=False, search=search, offset=offset, limit=200,
                                          library=library)
     out = []
+    sources = engine.subtitle_sources() if rows else None
     for r in rows:
         info = r["info"] or {}
         out.append({
@@ -416,10 +430,19 @@ def files(query):
             "tracks": [t for t in info.get("tracks", []) if t["type"] in ("audio", "subtitle")],
             "remove": [t["index"] for t in (r["plan"] or {}).get("remove", [])],
             "mark_forced": (r["plan"] or {}).get("mark_forced", []),
-            "files": info.get("external", []),
+            "files": [with_source(f, sources) for f in info.get("external", [])],
             "remove_files": [f["path"] for f in (r["plan"] or {}).get("remove_files", [])],
         })
     return {"total": total, "files": out}
+
+
+def with_source(file, sources):
+    """A subtitle file beside a film, with where it came from: from_bazarr is True and source names the provider
+    (e.g. "opensubtitlescom") when Bazarr downloaded it, False when it didn't, None when Bazarr can't say."""
+    if sources is None:
+        return {**file, "from_bazarr": None, "source": ""}
+    path = posixpath.normpath(file["path"])
+    return {**file, "from_bazarr": path in sources, "source": sources.get(path, "")}
 
 
 def history(query):
