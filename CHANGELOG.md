@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - **Try another part of the audio.** When you tag a track by hand, Play a 30s sample becomes Try another part after the first play, for when the sample happens to have no talking. Each press plays 30 seconds from somewhere else in the film (#18).
 - **Tagging and changing MP4s with a timecode track.** MP4s carrying a timecode or chapter-text data track, common in files from cameras and QuickTime, failed with "Could not write header (incorrect codec parameters ?)" when retagging or removing tracks. Those data tracks are now rebuilt by ffmpeg instead of copied, and a failed tag is written to the log too (#17).
