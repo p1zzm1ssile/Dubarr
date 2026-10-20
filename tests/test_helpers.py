@@ -76,3 +76,14 @@ def test_language_and_path_map_settings():
     with pytest.raises(ValueError):
         config.coerce(config.FIELDS_BY_KEY["radarr_path_map"], "/data/movies")
     assert config.coerce(config.FIELDS_BY_KEY["radarr_path_map"], "/data/movies=/movies") == "/data/movies=/movies"
+
+
+def test_another_sample_comes_from_elsewhere():
+    from core.probe import MediaInfo
+    from core.tagging import SAMPLE_POSITIONS, sample_start
+    film = MediaInfo(path="/m/film.mkv", container="matroska", duration=6000, size=1)
+    starts = [sample_start(film, part=n) for n in range(len(SAMPLE_POSITIONS))]
+    assert starts[0] == 1500  # a quarter of the way in, as before
+    assert len(set(starts)) == len(starts)
+    assert sample_start(film, part=len(SAMPLE_POSITIONS)) == 1500  # round again
+    assert sample_start(MediaInfo(path="/m/short.mkv", container="matroska", duration=60, size=1), part=3) == 0

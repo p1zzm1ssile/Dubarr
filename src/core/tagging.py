@@ -46,10 +46,22 @@ def _track(info: MediaInfo, index: int, kind=None):
     raise TagError(f"Track {index} isn't an audio or subtitle track in this file")
 
 
-def audio_sample(info: MediaInfo, index: int, seconds: int = 30) -> bytes:
-    """A short MP3 of one audio track, from about a quarter of the way in, where people are usually talking."""
+# Where samples come from, as a share of the film. The first is about a quarter in, where people are usually
+# talking; asking for another part moves on through these, for a sample that happened to have no speech.
+SAMPLE_POSITIONS = (0.25, 0.4, 0.55, 0.7, 0.1, 0.85)
+
+
+def sample_start(info: MediaInfo, seconds: int = 30, part: int = 0) -> int:
+    """The second a sample starts at. Short files always start at the beginning."""
+    if info.duration <= seconds * 3:
+        return 0
+    return int(info.duration * SAMPLE_POSITIONS[part % len(SAMPLE_POSITIONS)])
+
+
+def audio_sample(info: MediaInfo, index: int, seconds: int = 30, part: int = 0) -> bytes:
+    """A short MP3 of one audio track. part 0 is from about a quarter of the way in; later parts are elsewhere."""
     _track(info, index, "audio")
-    start = int(info.duration * 0.25) if info.duration > seconds * 3 else 0
+    start = sample_start(info, seconds, part)
     result = _run(["ffmpeg", "-nostdin", "-v", "error", "-ss", str(start), "-i", info.path, "-map", f"0:{index}",
                    "-t", str(seconds), "-vn", *ffmpeg_threads(), "-ac", "2", "-c:a", "libmp3lame", "-b:a", "96k", "-f", "mp3", "pipe:1"],
                   timeout=120, binary=True)
