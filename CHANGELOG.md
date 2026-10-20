@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
 - **Detect a track's language.** A new Language detection tab in Settings adds a Detect button to tracks under Listen & tag. Audio is sent to your own Whisper server (whisper-asr-webservice), which says what language is spoken, trying other parts of the film when a sample has no talking. Subtitles are read by a small detector built into Dubarr, with nothing to set up, or by your own Ollama. The suggestion shows how sure it is and is never saved until you choose it and press Save tags. The tab recommends which Whisper and Ollama models to use (#18).
 - **Keys for Whisper and Ollama stay private.** They're optional, sent only as a Bearer token to an https:// address (Dubarr won't save one with an http:// address), never passed on through a redirect, never sent to the browser, and kept out of the logs. Changing the address means typing the key again, so a saved key can't be sent to another server.
