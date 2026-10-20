@@ -196,7 +196,8 @@ class Handler(BaseHTTPRequestHandler):
                 })
             if path == "/api/sample":
                 info = engine.known_file(query.get("path", ""))
-                return self.send(200, audio_sample(info, int(query.get("index", -1))), "audio/mpeg")
+                sample = audio_sample(info, int(query.get("index", -1)), part=int(query.get("part", 0)))
+                return self.send(200, sample, "audio/mpeg")
             if path == "/api/subtitle-lines":
                 info = engine.known_file(query.get("path", ""))
                 return self.send(200, {"lines": subtitle_lines(info, int(query.get("index", -1)))})

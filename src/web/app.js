@@ -229,9 +229,16 @@ function tagPanel(file, onSaved) {
     let button;
     if (t.type === "audio") {
       button = el("button", { type: "button", text: "Play a 30s sample" });
+      let part = 0;
       button.addEventListener("click", () => {
-        preview.replaceChildren(el("audio", { controls: true, autoplay: true, preload: "auto", src: `/api/sample?${query(t)}` }),
-          el("div", { class: "help", text: "Taken from about a quarter of the way in. It can take a few seconds to start." }));
+        const q = query(t);
+        q.set("part", part);
+        preview.replaceChildren(el("audio", { controls: true, autoplay: true, preload: "auto", src: `/api/sample?${q}` }),
+          el("div", { class: "help", text: part === 0
+            ? "Taken from about a quarter of the way in. It can take a few seconds to start. No talking? Try another part."
+            : "Taken from another part of the film. It can take a few seconds to start." }));
+        part += 1;
+        button.textContent = "Try another part";
       });
     } else {
       button = el("button", { type: "button", text: "Show some lines" });
