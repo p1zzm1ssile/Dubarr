@@ -76,6 +76,7 @@ TABS = {
     "sonarr": "Sonarr",
     "bazarr": "Bazarr",
     "jellyfin": "Jellyfin",
+    "detection": "Language detection",
 }
 
 
@@ -93,6 +94,14 @@ def _default_libraries():
 OTHER_SUBTITLES_KEEP = "Keep them"
 OTHER_SUBTITLES_LIST = "List them for me to remove"
 OTHER_SUBTITLES_AUTO = "Remove them by themselves"
+
+# How subtitle tracks with no language tag are read
+SUBTITLES_BUILT_IN = "Built in"
+SUBTITLES_OLLAMA = "Ollama"
+SUBTITLES_OFF = "Off"
+
+# Services Dubarr only sends a key to over https://, so it can't be read on the network on the way
+HTTPS_ONLY_SECRETS = {"whisper_api_key": "whisper_url", "ollama_api_key": "ollama_url"}
 
 
 def F(key, tab, label, type, default, help="", section="", group=None, **extra):
@@ -255,6 +264,36 @@ FIELDS = [
            "them on the Dashboard under \"Subtitles not from Bazarr\" for you to remove. Remove them by themselves "
            "does it about every 10 minutes, even with Report only on. Nothing is removed while Bazarr's history is "
            "empty or Bazarr can't be reached."),
+
+    # Language detection: suggestions for untagged tracks, never applied without you
+    F("whisper_enabled", "detection", "Detect audio languages with Whisper", "bool",
+      env_bool("WHISPER_ENABLED", default=bool(os.getenv("WHISPER_URL"))), section="Audio: Whisper",
+      help="Adds a Detect button to audio tracks. Dubarr sends a 30 second sample to a whisper-asr-webservice "
+           "container, which says what language is spoken. If a sample has no talking, it tries other parts of the film."),
+    F("whisper_url", "detection", "Address", "text", env_str("WHISPER_URL", default="localhost:9000"),
+      section="Audio: Whisper"),
+    F("whisper_api_key", "detection", "API key (optional)", "secret", env_str("WHISPER_API_KEY"),
+      section="Audio: Whisper",
+      help="Only if Whisper is behind a proxy that asks for one. It's sent as a Bearer token, and only to an https:// "
+           "address, so it can't be read on the network."),
+    F("subtitle_detector", "detection", "Detect subtitle languages with", "select",
+      {"ollama": SUBTITLES_OLLAMA, "off": SUBTITLES_OFF}.get(
+          env_str("SUBTITLE_DETECTOR", default="").strip().lower(), SUBTITLES_BUILT_IN),
+      section="Subtitles", options=[SUBTITLES_BUILT_IN, SUBTITLES_OLLAMA, SUBTITLES_OFF],
+      help="Built in reads a few dozen lines of a text subtitle track inside Dubarr, with nothing to set up, and is "
+           "right almost every time on ordinary dialogue. Ollama asks your own language model instead: slower, but "
+           "better with very short or mixed-language lines. Picture subtitles (PGS) can't be read either way."),
+    F("ollama_url", "detection", "Ollama address", "text", env_str("OLLAMA_URL", default="localhost:11434"),
+      section="Subtitles"),
+    F("ollama_model", "detection", "Ollama model", "text", env_str("OLLAMA_MODEL", default="qwen2.5:3b"),
+      section="Subtitles", placeholder="qwen2.5:3b",
+      help="qwen2.5:3b or gemma3:4b are recommended: both know many languages and run well on a CPU. "
+           "llama3.2:3b works too but is weaker outside European languages. Avoid 1B models, which make up "
+           "language codes. Pull it first with ollama pull."),
+    F("ollama_api_key", "detection", "Ollama API key (optional)", "secret", env_str("OLLAMA_API_KEY"),
+      section="Subtitles",
+      help="Only if Ollama is behind a proxy that asks for one. It's sent as a Bearer token, and only to an https:// "
+           "address, so it can't be read on the network."),
 ]
 
 def with_scheme(url):
@@ -286,7 +325,7 @@ SECRET_KEYS = {f["key"] for f in FIELDS if f["type"] == "secret"}
 # address, or anyone with access could send it to a server of their choosing.
 SECRET_URLS = {
     "radarr_api_key": "radarr_url", "sonarr_api_key": "sonarr_url", "jellyfin_api_key": "jellyfin_url",
-    "bazarr_api_key": "bazarr_url",
+    "bazarr_api_key": "bazarr_url", **HTTPS_ONLY_SECRETS,
 }
 
 
@@ -300,6 +339,17 @@ def secrets_needing_reentry(changes: dict) -> dict:
         if changes.get(secret) is None and values.get(secret):
             label = FIELDS_BY_KEY[secret]["label"]
             problems[secret] = f"{label}: enter it again, since the address changed"
+    return problems
+
+
+def secrets_over_http(raw: dict) -> dict:
+    """{secret key: reason} for keys that would be sent to a plain http:// address."""
+    problems = {}
+    for secret, url in HTTPS_ONLY_SECRETS.items():
+        if raw.get(secret) and not str(raw.get(url) or "").strip().lower().startswith("https://"):
+            label = FIELDS_BY_KEY[secret]["label"]
+            problems[secret] = (f"{label}: needs an https:// address, or anyone on the network could read it. "
+                                "Leave it empty if the service doesn't ask for one")
     return problems
 
 
@@ -444,6 +494,9 @@ def resolve(raw):
         resolved[f"{service}_url"] = ensure_http(raw[f"{service}_url"]).rstrip("/") + "/api/v3"
     resolved["jellyfin_url"] = ensure_http(raw["jellyfin_url"]).rstrip("/")
     resolved["bazarr_url"] = ensure_http(raw["bazarr_url"]).rstrip("/")
+    resolved["whisper_url"] = ensure_http(raw["whisper_url"]).rstrip("/")
+    resolved["ollama_url"] = ensure_http(raw["ollama_url"]).rstrip("/")
+    resolved["ollama_model"] = raw["ollama_model"] or "qwen2.5:3b"
     for service in ("radarr", "sonarr", "bazarr", "jellyfin"):
         try:
             resolved[f"{service}_paths"] = parse_path_map(raw[f"{service}_path_map"])
@@ -528,6 +581,8 @@ def update(changes: dict):
             errors[key] = f"{field['label']} {e}"
 
     errors.update(secrets_needing_reentry(changes))
+    if not errors:
+        errors.update(secrets_over_http({**values, **clean}))
     if errors:
         return errors
 
@@ -552,6 +607,9 @@ def preview(changes: dict):
         if field is None or (field["type"] == "secret" and value is None):
             continue
         raw[key] = coerce(field, value)
+    problems = secrets_over_http(raw)
+    if problems:
+        raise ValueError("; ".join(problems.values()))
     target = SimpleNamespace(**{k: v for k, v in globals().items() if not k.startswith("_")})
     apply(target, raw)
     return target

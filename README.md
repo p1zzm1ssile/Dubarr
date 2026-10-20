@@ -32,6 +32,15 @@ Video, chapters, fonts and anything that isn't audio or subtitles is always kept
 
 **Untagged tracks:** press *Listen & tag* on the Dashboard to hear a 30-second sample of an audio track, or read a few lines of a subtitle track, then choose its language. Dubarr writes the tag into the file (MKV files in place, in a moment), so it isn't flagged again. Picture-based subtitles (Blu-ray PGS) can't be shown as text. Files that are still seeding aren't tagged, as that would change the torrent's data.
 
+**Detect the language:** with language detection set up (Settings > Language detection), untagged tracks get a *Detect* button. Audio goes to your own [Whisper](https://github.com/ahmetoner/whisper-asr-webservice) server, which listens to a sample and tries other parts of the film if there's no talking. Subtitles are read by a small detector built into Dubarr, or by your own Ollama if you choose. Either way it's a suggestion with how sure it is: nothing is tagged until you choose it and press *Save tags*.
+
+| | CPU | Low-power box | GPU |
+|---|---|---|---|
+| Whisper (`ASR_MODEL`) | `small` | `base` | `medium` or `large-v3` |
+| Ollama (subtitles only) | `qwen2.5:3b` or `gemma3:4b` | `qwen2.5:3b` | either |
+
+Never use Whisper's `.en` models, which only know English. Avoid 1B Ollama models, which make up language codes. Whisper and Ollama don't need a key; if yours is behind a proxy that asks for one, Dubarr only sends it to an `https://` address, never follows redirects with it, and keeps it out of the logs and the browser.
+
 **Removing a track by hand:** press *Check tracks* on the Dashboard, tick *Remove* on any audio or subtitle track, or subtitle file, and press *Remove ticked*. With Bazarr connected, each subtitle file says whether Bazarr downloaded it, and from where (OpenSubtitles.com, say).
 
 **One library at a time:** with more than one library, pick one next to *Apply all* on the Dashboard to list and apply just its files.
