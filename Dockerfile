@@ -10,8 +10,8 @@ WORKDIR /app
 
 # ffprobe reads the tracks, mkvmerge (MKV) and ffmpeg (MP4) write the cleaned copy,
 # mkvpropedit sets language tags in place, and ffmpeg makes the audio samples.
-# Nothing is re-encoded, so no GPU is needed.
-RUN apk add --no-cache python3 py3-pip ffmpeg mkvtoolnix
+# Nothing is re-encoded, so no GPU is needed. numpy is for the built-in subtitle language detector.
+RUN apk add --no-cache python3 py3-pip py3-numpy ffmpeg mkvtoolnix
 COPY ./src/requirements.txt .
 RUN pip install --no-cache-dir --break-system-packages -r /app/requirements.txt
 COPY ./src .

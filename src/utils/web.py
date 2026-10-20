@@ -19,6 +19,7 @@ import utils.config as config
 import utils.status as status
 from core import plan as plans
 from core.engine import ERROR, NOT_BAZARR, SEEDING, TOO_SMALL, Busy, in_window
+from core import detect as detection
 from core.swap import SwapError
 from core.tagging import TagError, audio_sample, subtitle_lines
 from services.connections import Arr, Bazarr, Jellyfin, ServiceError, webhook_paths
@@ -345,6 +346,13 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError("tags must be an object")
                     message = engine.tag(data.get("path", ""), tags)
                     return self.send(200, {"ok": True, "message": message})
+                if path == "/api/detect":
+                    info = engine.known_file(data.get("path", ""))
+                    try:
+                        index = int(data.get("index", -1))
+                    except (TypeError, ValueError):
+                        raise ValueError("index must be a track number")
+                    return self.send(200, detection.detect(info, index))
                 if path == "/api/ignore":
                     engine.store.set_ignored(data.get("path", ""), bool(data.get("ignored")))
                     return self.send(200, {"ok": True})
@@ -359,7 +367,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(200, {"ok": True, "message": "Restoring the whole batch"})
             except Busy as e:
                 return self.send(409, {"error": str(e)})
-            except (SwapError, TagError) as e:
+            except (SwapError, TagError, detection.DetectError, ServiceError) as e:
                 return self.send(400, {"error": str(e)})
 
             self.send(404, {"error": "Not found"})
@@ -434,7 +442,8 @@ def files(query):
             "files": [with_source(f, sources) for f in info.get("external", [])],
             "remove_files": [f["path"] for f in (r["plan"] or {}).get("remove_files", [])],
         })
-    return {"total": total, "files": out}
+    return {"total": total, "files": out,
+            "detect": {"audio": detection.audio_enabled(), "subtitles": detection.subtitles_enabled()}}
 
 
 def with_source(file, sources):
@@ -503,6 +512,10 @@ def test_connection(target, values):
     """Try a connection with the settings on screen, saved or not."""
     try:
         cfg = config.preview(values)
+        if target == "whisper":
+            return {"ok": True, "message": detection.test_whisper(cfg)}
+        if target == "ollama":
+            return {"ok": True, "message": detection.test_ollama(cfg)}
         if target not in ("radarr", "sonarr", "bazarr", "jellyfin"):
             return {"ok": False, "message": "Unknown service"}
         if not getattr(cfg, f"{target}_api_key"):
@@ -528,7 +541,7 @@ def test_connection(target, values):
         version = arr.version()
         what = "movies" if target == "radarr" else "series"
         return {"ok": True, "message": f"Connected to {arr.name} {version} ({len(arr.items())} {what})"}
-    except (ServiceError, ValueError) as e:
+    except (ServiceError, detection.DetectError, ValueError) as e:
         return {"ok": False, "message": str(e)}
 
 

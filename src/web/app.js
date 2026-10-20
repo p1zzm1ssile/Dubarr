@@ -84,6 +84,7 @@ function splitPath(path) {
 }
 
 let languages = {};
+let detection = { audio: false, subtitles: false };  // which Detect buttons to show, from /api/files
 const langName = (code) => languages[code] || { und: "Unknown", mul: "Multiple", zxx: "No speech" }[code] || code;
 
 let refreshTimer = null;
@@ -216,6 +217,36 @@ function languageSelect(current) {
     options.map(([code, name]) => el("option", { value: code, text: name, selected: code === current })));
 }
 
+// Ask Whisper, Ollama or the built-in detector for a track's language, and offer it as a suggestion
+function detectButton(file, t, preview, select) {
+  if (!(t.type === "audio" ? detection.audio : detection.subtitles)) return null;
+  const button = el("button", { type: "button", text: "Detect", title: t.type === "audio"
+    ? "Whisper listens to a sample and suggests the language" : "Reads some lines and suggests the language" });
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    preview.replaceChildren(el("div", { class: "muted small", text: t.type === "audio"
+      ? "Listening… Whisper can take a little while, and tries other parts of the film if there's no talking."
+      : "Reading…" }));
+    try {
+      const g = await post("/api/detect", { path: file.path, index: t.index });
+      const use = el("button", { type: "button", text: `Use ${g.name}` });
+      use.addEventListener("click", () => {
+        select().value = g.language;
+        use.disabled = true;
+        use.textContent = `${g.name} chosen. Press Save tags`;
+      });
+      preview.replaceChildren(el("div", { class: `detect-result ${g.sure ? "" : "unsure"}` },
+        el("span", { text: `${g.by} thinks it's ${g.name} (${Math.round(g.confidence * 100)}% sure). `
+          + (g.sure ? "" : "Not very sure: listen or read to check before using it. ") }), use));
+    } catch (e) {
+      preview.replaceChildren(el("div", { class: "error-text", text: e.message }));
+    } finally {
+      button.disabled = false;
+    }
+  });
+  return button;
+}
+
 function tagPanel(file, onSaved) {
   const isMp4 = /\.(mp4|m4v)$/i.test(file.path);
   const selects = {};
@@ -256,6 +287,7 @@ function tagPanel(file, onSaved) {
       });
     }
     selects[t.index] = languageSelect(t.language);
+    const detect = detectButton(file, t, preview, () => selects[t.index]);
     removeTrack[t.index] = el("input", { type: "checkbox", "aria-label": `Remove track ${t.index}` });
     const details = [t.type === "audio" ? "Audio" : "Subtitles", `track ${t.index}`, t.codec,
       t.channels ? `${t.channels} ch` : "", t.title ? `“${t.title}”` : "",
@@ -264,7 +296,7 @@ function tagPanel(file, onSaved) {
       el("div", { class: "tag-head" },
         el("div", {}, el("strong", { text: details }),
           el("div", { class: "small muted", text: t.language === "und" ? "No language tag" : `Tagged ${langName(t.language)}` })),
-        el("div", { class: "tag-controls" }, button, selects[t.index],
+        el("div", { class: "tag-controls" }, button, detect, selects[t.index],
           el("label", { class: "remove-pick" }, removeTrack[t.index], "Remove"))),
       preview);
   });
@@ -430,6 +462,7 @@ async function showDashboard(selected) {
   async function loadFiles(append) {
     const params = new URLSearchParams({ status, search: search.value.trim(), offset: append ? shown.length : 0, library });
     const r = await api(`/api/files?${params}`);
+    if (r.detect) detection = r.detect;
     shown = append ? shown.concat(r.files) : r.files;
     total = r.total;
     renderRows();
@@ -798,7 +831,11 @@ function webhookPanel(tab) {
     el("p", { class: "help", text: "The address contains a secret. Keep it private, like an API key." }));
 }
 
-const TESTABLE = { radarr: "radarr", sonarr: "sonarr", bazarr: "bazarr", jellyfin: "jellyfin" };
+// The section on each tab that gets a Test connection button, and what it tests
+const TESTABLE = {
+  radarr: { Connection: "radarr" }, sonarr: { Connection: "sonarr" }, bazarr: { Connection: "bazarr" },
+  jellyfin: { Connection: "jellyfin" }, detection: { "Audio: Whisper": "whisper", Subtitles: "ollama" },
+};
 
 const TAB_INTRO = {
   libraries: "The folders Dubarr checks, as they're mapped inside the Dubarr container. Leave the languages empty to use the ones on the General tab, or set them for one library, e.g. Japanese, English audio for anime. Separate languages with commas.",
@@ -806,6 +843,7 @@ const TAB_INTRO = {
   sonarr: "Optional. After changing an episode, Dubarr asks Sonarr to rescan the series, so Sonarr shows the new tracks and size.",
   bazarr: "Optional. After changing a film, Dubarr asks Bazarr to look at it again straight away, and to search for subtitles if the change left none in your languages. Test connection also checks Bazarr's language profiles: a language Bazarr downloads but Dubarr removes would keep coming back.",
   jellyfin: "Optional. After changing a file, Dubarr tells Jellyfin, so the audio and subtitle menus update without a full library scan.",
+  detection: "Optional. Adds a Detect button to tracks under Listen & tag, which suggests their language. A suggestion is never saved until you choose it and press Save tags. For Whisper, run the whisper-asr-webservice container (onerahmet/openai-whisper-asr-webservice) with ASR_MODEL=small on a CPU, base on a low-power box, or medium or large-v3 with a GPU. Never a .en model: those only know English, so they can't tell languages apart. Ollama's Test connection checks the model is pulled.",
 };
 
 async function showSettings(tab, savedMessage) {
@@ -857,7 +895,7 @@ async function showSettings(tab, savedMessage) {
     return el("div", { class: "panel" },
       tab === "libraries" ? null : el("h2", { text: section.title }),
       el("div", { class: wide ? "" : "grid-2" }, rendered.map((r) => r.node)),
-      TESTABLE[tab] && section.title === "Connection" ? testButton(TESTABLE[tab]) : null);
+      TESTABLE[tab] && TESTABLE[tab][section.title] ? testButton(TESTABLE[tab][section.title]) : null);
   });
 
   if (TAB_INTRO[tab]) content.unshift(el("p", { class: "muted", text: TAB_INTRO[tab] }));
