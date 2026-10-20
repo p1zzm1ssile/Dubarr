@@ -729,8 +729,13 @@ class Engine:
                     new = tagging.retag_mp4(info, wanted)
                     swap.swap(self.store, None, path, info.size, new.size, message, [],
                               swap.recycle_root(library["path"], config.recycle_folder), config.recycle_days)
+            except tagging.TagError as e:
+                logger.error(f"Couldn't tag {path}: {e}. The original is untouched")
+                raise
             except (RemuxError, swap.SwapError, OSError) as e:
-                raise tagging.TagError(getattr(e, "strerror", None) or str(e))
+                reason = getattr(e, "strerror", None) or str(e)
+                logger.error(f"Couldn't tag {path}: {reason}")
+                raise tagging.TagError(reason)
 
             logger.log("ACTION", f"{message} in {path}")
             self.check_file(library, path, reread=True)

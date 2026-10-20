@@ -83,7 +83,8 @@ def mkvmerge_command(source: str, target: str, info: MediaInfo, plan: Plan) -> l
 
 def ffmpeg_command(source: str, target: str, info: MediaInfo, plan: Plan) -> list:
     removed = {r["index"] for r in plan.remove}
-    command = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", source, "-map", "0"]
+    # Data streams (timecode, chapter text) can't be copied into MP4. ffmpeg rebuilds them from the metadata
+    command = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", source, "-map", "0", "-map", "-0:d"]
     for index in sorted(removed):
         command += ["-map", f"-0:{index}"]
     command += ["-c", "copy", "-map_metadata", "0", "-map_chapters", "0"]
