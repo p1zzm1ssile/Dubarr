@@ -122,7 +122,8 @@ def tag_mkv(info: MediaInfo, changes: dict):
 def retag_mp4(info: MediaInfo, changes: dict) -> MediaInfo:
     """Write a copy of an MP4 with new language tags to temp_path(), and check it. Returns its info."""
     target = temp_path(info.path)
-    command = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", info.path, "-map", "0", "-c", "copy",
+    # Data streams (timecode, chapter text) can't be copied into MP4. ffmpeg rebuilds them from the metadata
+    command = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", info.path, "-map", "0", "-map", "-0:d", "-c", "copy",
                "-map_metadata", "0", "-map_chapters", "0"]
     for index, code in sorted(changes.items()):
         command += [f"-metadata:s:{index}", f"language={bibliographic(code)}"]

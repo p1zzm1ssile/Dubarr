@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Try another part of the audio.** When you tag a track by hand, Play a 30s sample becomes Try another part after the first play, for when the sample happens to have no talking. Each press plays 30 seconds from somewhere else in the film (#18).
+- **Tagging and changing MP4s with a timecode track.** MP4s carrying a timecode or chapter-text data track, common in files from cameras and QuickTime, failed with "Could not write header (incorrect codec parameters ?)" when retagging or removing tracks. Those data tracks are now rebuilt by ffmpeg instead of copied, and a failed tag is written to the log too (#17).
 - **Remove tracks by hand.** Check tracks on the Dashboard now has a Remove tickbox on every audio and subtitle track and on every subtitle file beside the film. Remove ticked takes out just those, even in languages you keep, the same safe way as any change: a checked copy, with the original in the recycle folder to restore from History. The last audio track can't be removed, and tracks aren't removed from a file that's still seeding.
 - **Where each subtitle file came from.** With Bazarr connected, subtitle files beside a film are marked as Bazarr's, with the site it got them from (OpenSubtitles.com, SubDL and so on), or as not from Bazarr.
 - **Apply all in one library.** With more than one library, a library picker next to Apply all on the Dashboard lists, and applies, just that library's files, e.g. your anime folder and not your films.

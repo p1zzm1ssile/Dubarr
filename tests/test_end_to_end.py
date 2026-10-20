@@ -1,6 +1,7 @@
 """Real files through the whole cycle: scan, change, check, restore, recycle."""
 
 import os
+import subprocess
 import time
 
 import pytest
@@ -226,6 +227,25 @@ def test_listen_and_tag(library, engine, ext):
         engine.tag(film, {"0": "eng"})
     with pytest.raises(tagging.TagError):
         engine.tag(film, {"2": "elvish"})
+
+
+def test_mp4_with_timecode_track(library, engine):
+    # Camera and QuickTime files carry a timecode data track that ffmpeg can't copy into MP4 (#17)
+    plain = make_video(str(library / "plain.mp4"), audio=("eng", ""))
+    film = str(library / "x.mp4")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", plain, "-map", "0", "-c", "copy",
+                    "-timecode", "00:00:00:00", film], check=True)
+    os.remove(plain)
+    assert [s.type for s in probe(film).tracks][-1] == "other"
+    engine.scan()
+    assert engine.tag(film, {"2": "ita"}) == "Tagged audio track 2 as Italian"
+    assert tracks(film, "audio") == ["eng", "ita"]
+
+    from core.plan import Rules, decide
+    from core.remux import remux
+    info = probe(film)
+    new = remux(info, decide(info, Rules(["eng"], ["eng"])))
+    assert [t.language for t in new.of("audio")] == ["eng"]
 
 
 def test_no_tagging_while_seeding(library, engine, tmp_path):
