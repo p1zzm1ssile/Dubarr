@@ -1,9 +1,11 @@
 """Dubarr's database: what's in each file, what was changed, and what can be restored.
 
-One SQLite file in CONFIG_DIR. Three tables:
-  files    every video file seen, its tracks and what Dubarr decided about it
-  history  every file Dubarr changed, and where the original went
-  runs     each batch of changes, so a whole batch can be undone at once
+One SQLite file in CONFIG_DIR. Five tables:
+  files      every video file seen, its tracks and what Dubarr decided about it
+  history    every file Dubarr changed, and where the original went
+  runs       each batch of changes, so a whole batch can be undone at once
+  guesses    the language detected for untagged tracks, kept as suggestions
+  auto_tags  files tagged from a guess, and whether their tracks wait for you to check them
 """
 
 import json
@@ -53,9 +55,31 @@ CREATE TABLE IF NOT EXISTS history (
     restored_at REAL
 );
 CREATE INDEX IF NOT EXISTS history_run ON history(run_id);
+
+CREATE TABLE IF NOT EXISTS guesses (
+    path TEXT NOT NULL,
+    idx INTEGER NOT NULL,
+    size INTEGER NOT NULL,   -- the file's size and time when guessed: a changed file is guessed again
+    mtime REAL NOT NULL,
+    language TEXT,           -- empty when it couldn't be told, with error saying why
+    confidence REAL NOT NULL DEFAULT 0,
+    by TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    checked_at REAL NOT NULL,
+    PRIMARY KEY (path, idx)
+);
+
+CREATE TABLE IF NOT EXISTS auto_tags (
+    path TEXT PRIMARY KEY,
+    message TEXT NOT NULL,
+    held INTEGER NOT NULL,   -- tracks aren't removed until you've checked it, or HOLD_DAYS pass
+    tagged_at REAL NOT NULL
+);
 """
 
 RESTORABLE = "done"
+TAGGED = "tagged"  # a language tag set in place: nothing to restore
+HOLD_DAYS = 7
 
 
 class Store:
@@ -106,6 +130,7 @@ class Store:
 
     def forget(self, path):
         """Drop one file. Returns whether it was known."""
+        self._run("DELETE FROM guesses WHERE path = ?", (path,))
         return self._run("DELETE FROM files WHERE path = ?", (path,)).rowcount > 0
 
     def forget_missing(self, library, present: set):
@@ -195,6 +220,42 @@ class Store:
     def history_in_state(self, *states):
         marks = ",".join("?" * len(states))
         return [_decode_history(r) for r in self._all(f"SELECT * FROM history WHERE state IN ({marks}) ORDER BY id", states)]
+
+    def add_tag_history(self, path, message):
+        """An entry for tags written in place, so automatic tagging shows in History."""
+        return self._run("INSERT INTO history (path, message, state, changed_at) VALUES (?, ?, ?, ?)",
+                         (path, message, TAGGED, time.time())).lastrowid
+
+    # Guesses and automatic tags
+
+    def save_guess(self, path, idx, size, mtime, language="", confidence=0.0, by="", error=""):
+        self._run(
+            """INSERT INTO guesses (path, idx, size, mtime, language, confidence, by, error, checked_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(path, idx) DO UPDATE SET size=excluded.size, mtime=excluded.mtime,
+                 language=excluded.language, confidence=excluded.confidence, by=excluded.by,
+                 error=excluded.error, checked_at=excluded.checked_at""",
+            (path, idx, size, mtime, language, confidence, by, error, time.time()))
+
+    def guesses(self, path, size, mtime):
+        """{track index: guess} made for the file as it is now, failed ones included (with an error)."""
+        rows = self._all("SELECT * FROM guesses WHERE path = ? AND size = ? AND mtime = ?", (path, size, mtime))
+        return {r["idx"]: r for r in rows}
+
+    def set_auto_tags(self, path, message, held):
+        self._run("""INSERT INTO auto_tags (path, message, held, tagged_at) VALUES (?, ?, ?, ?)
+                     ON CONFLICT(path) DO UPDATE SET message=excluded.message, held=excluded.held,
+                       tagged_at=excluded.tagged_at""", (path, message, 1 if held else 0, time.time()))
+
+    def held(self, path):
+        """The automatic tagging a file waits on you to check, or None."""
+        row = self._one("SELECT * FROM auto_tags WHERE path = ? AND held = 1 AND tagged_at > ?",
+                        (path, time.time() - HOLD_DAYS * 86400))
+        return row
+
+    def release(self, path):
+        """You've checked it, or tagged it yourself: its tracks can be changed as usual."""
+        return self._run("DELETE FROM auto_tags WHERE path = ?", (path,)).rowcount > 0
 
     def total_saved(self):
         row = self._one("SELECT SUM(original_size - new_size) AS saved, COUNT(*) AS n FROM history "

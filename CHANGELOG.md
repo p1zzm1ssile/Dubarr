@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+- **Suggestions are waiting for you.** Dubarr now detects the language of untagged tracks in the background, at low priority, so the Untagged audio and Untagged subtitles lists already show each film's suggestion. Use suggestions confirms them in one click (#18).
+- **Detect again listens elsewhere.** Pressing Detect a second time tries parts of the film it hasn't heard yet, in case music fooled it the first time.
+- **Accept all, or tag automatically.** Accept all on the Untagged lists tags every suggestion at least as sure as the level you pick. Settings > Language detection can also tag by itself above a level (off by default). Every automatic tag is listed in History.
+- **Tagged automatically waits for a check.** A wrong tag could get the wrong track removed, so a file tagged from a guess is listed under Tagged automatically and nothing is removed from it until you press Looks right, or for 7 days. Guesses at least 97% sure (changeable in Settings) skip the wait. Tagging a file yourself counts as checking it.
+- **Saving tags no longer blocks.** Tags are saved in turn in the background, so you can move straight on to the next film while an MP4 is copied with its new tags.
+
 ## 0.6.0
 
 - **Detect a track's language.** A new Language detection tab in Settings adds a Detect button to tracks under Listen & tag. Audio is sent to your own Whisper server (whisper-asr-webservice), which says what language is spoken, trying other parts of the film when a sample has no talking. Subtitles are read by a small detector built into Dubarr, with nothing to set up, or by your own Ollama. The suggestion shows how sure it is and is never saved until you choose it and press Save tags. The tab recommends which Whisper and Ollama models to use (#18).

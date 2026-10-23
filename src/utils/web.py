@@ -18,7 +18,7 @@ import utils.auth as auth
 import utils.config as config
 import utils.status as status
 from core import plan as plans
-from core.engine import ERROR, NOT_BAZARR, SEEDING, TOO_SMALL, Busy, in_window
+from core.engine import AUTO_TAGGED, ERROR, NOT_BAZARR, SEEDING, TOO_SMALL, Busy, in_window
 from core import detect as detection
 from core.swap import SwapError
 from core.tagging import TagError, audio_sample, subtitle_lines
@@ -52,6 +52,7 @@ STATUSES = {
     SEEDING: "Waiting for seeding to stop",
     TOO_SMALL: "Not worth rewriting",
     plans.NO_WANTED_AUDIO: "No wanted audio",
+    AUTO_TAGGED: "Tagged automatically",
     plans.UNKNOWN_AUDIO: "Untagged audio",
     plans.UNKNOWN_SUBTITLES: "Untagged subtitles",
     plans.UNKNOWN_ORIGINAL: "Original language unknown",
@@ -344,15 +345,41 @@ class Handler(BaseHTTPRequestHandler):
                     tags = data.get("tags") or {}
                     if not isinstance(tags, dict):
                         raise ValueError("tags must be an object")
-                    message = engine.tag(data.get("path", ""), tags)
-                    return self.send(200, {"ok": True, "message": message})
+                    file = data.get("path", "")
+                    # Checked now, so a mistake shows straight away; written in turn, so you can go on to the next film
+                    if not engine.tags_wanted(file, tags):
+                        return self.send(200, {"ok": True, "message": "Nothing to change"})
+                    engine.background(engine.tag, file, tags, wait=True)
+                    mp4 = not file.lower().endswith((".mkv", ".mk3d"))
+                    return self.send(200, {"ok": True, "message": "Saving. MP4 files are copied with the new tags, one "
+                                           "at a time, and show under History when done" if mp4 else "Saved"})
+                if path == "/api/accept":
+                    try:
+                        minimum = int(data.get("minimum", 0))
+                    except (TypeError, ValueError):
+                        raise ValueError("minimum must be a percentage")
+                    if not 50 <= minimum <= 100:
+                        raise ValueError("Pick a level from 50% to 100%")
+                    library = data.get("library") or None
+                    if library and library not in [lib["path"] for lib in config.library_list]:
+                        raise ValueError("That library isn't set up in Dubarr")
+                    engine.background(engine.accept_guesses, minimum, library, wait=True)
+                    return self.send(200, {"ok": True, "message": f"Tagging the tracks at least {minimum}% sure. "
+                                           "They show under History as they're done"})
+                if path == "/api/looks-right":
+                    engine.background(engine.looks_right, data.get("path", ""), wait=True)
+                    return self.send(200, {"ok": True, "message": "Thanks. Dubarr changes it like any other file"})
                 if path == "/api/detect":
                     info = engine.known_file(data.get("path", ""))
                     try:
                         index = int(data.get("index", -1))
                     except (TypeError, ValueError):
                         raise ValueError("index must be a track number")
-                    return self.send(200, detection.detect(info, index))
+                    try:
+                        start = max(0, int(data.get("start", 0)))
+                    except (TypeError, ValueError):
+                        start = 0
+                    return self.send(200, detection.detect(info, index, start=start))
                 if path == "/api/ignore":
                     engine.store.set_ignored(data.get("path", ""), bool(data.get("ignored")))
                     return self.send(200, {"ok": True})
@@ -441,6 +468,9 @@ def files(query):
             "mark_forced": (r["plan"] or {}).get("mark_forced", []),
             "files": [with_source(f, sources) for f in info.get("external", [])],
             "remove_files": [f["path"] for f in (r["plan"] or {}).get("remove_files", [])],
+            "guesses": {i: {"language": g["language"], "name": name(g["language"]), "by": g["by"],
+                            "confidence": round(g["confidence"], 2), "sure": g["confidence"] >= detection.CONFIDENT}
+                        for i, g in engine.guesses(r).items()},
         })
     return {"total": total, "files": out,
             "detect": {"audio": detection.audio_enabled(), "subtitles": detection.subtitles_enabled()}}

@@ -387,6 +387,10 @@ ul.files li.unwanted .fname { color: var(--muted); text-decoration: line-through
 .tag-controls { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 .tag-controls select { width: 220px; }
 .tag-controls button { padding: 0.35rem 0.75rem; font-size: 0.85rem; }
+.suggested { color: var(--accent, inherit); margin-top: 0.2rem; }
+.accept-all { display: inline-flex; gap: 0.4rem; align-items: center; white-space: nowrap; }
+.accept-all .accept-level { width: 4.5rem; }
+.accept-all[hidden] { display: none; }
 .detect-result { margin-top: 0.5rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 .detect-result.unsure span { color: var(--warn); }
 .tag-preview audio { width: 100%; max-width: 420px; margin-top: 0.5rem; }

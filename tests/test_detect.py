@@ -177,3 +177,115 @@ def test_keys_masked_in_the_log(monkeypatch):
     record = {"message": "Ollama rejected s3cret-key at https://x/?token=abc"}
     redact(record)
     assert "s3cret-key" not in record["message"] and "abc" not in record["message"]
+
+
+def test_detect_again_listens_elsewhere(monkeypatch):
+    film = SimpleNamespace(tracks=[SimpleNamespace(index=1, type="audio")])
+    heard = []
+    monkeypatch.setattr(detect, "audio_sample", lambda info, index, part: heard.append(part) or b"mp3")
+    monkeypatch.setattr(detect, "_whisper", lambda cfg, sample: {"language_code": "en", "confidence": 0.2})
+    detect.detect(film, 1, settings(), start=3)
+    assert heard == [3, 4, 5]
+
+
+# Detection in the background, automatic tagging and the wait before tracks are removed
+
+@pytest.fixture
+def library(tmp_path, monkeypatch):
+    root = tmp_path / "movies"
+    root.mkdir()
+    monkeypatch.setattr(config, "library_list", [{"path": str(root), "audio": ["eng"], "subtitles": ["eng"]}])
+    for key, value in dict(report_only=True, recycle_days=7, recycle_folder="", process_hardlinked=False,
+                           active_from=0, active_until=0, max_changes_per_pass=25, keep_original_audio=False,
+                           bazarr_other_subtitles=config.OTHER_SUBTITLES_KEEP, min_saving_mb=0,
+                           whisper_enabled=True, whisper_api_key="", subtitle_detector=config.SUBTITLES_OFF,
+                           detect_in_background=True, auto_tag_confidence=0, trust_confidence=97).items():
+        monkeypatch.setattr(config, key, value)
+    for kind in ("radarr", "sonarr", "jellyfin", "bazarr"):
+        monkeypatch.setattr(config, f"{kind}_enabled", False)
+    return root
+
+
+@pytest.fixture
+def engine(tmp_path):
+    from core.engine import Engine
+    from core.store import Store
+    return Engine(Store(str(tmp_path / "dubarr.db")))
+
+
+def whisper_says(monkeypatch, code, confidence):
+    fake = Fake([(200, {"language_code": code, "confidence": confidence})] * 10)
+    monkeypatch.setattr(config, "whisper_url", fake.url)
+    return fake
+
+
+@needs_tools
+def test_background_detection_keeps_suggestions_only(library, engine, monkeypatch):
+    from core import plan as plans
+    film = make_video(str(library / "x.mkv"), audio=("eng", ""))
+    engine.scan()
+    fake = whisper_says(monkeypatch, "it", 0.95)
+    try:
+        engine.detect_pass()
+        engine.detect_pass()  # already guessed: Whisper isn't asked again
+    finally:
+        fake.close()
+    assert len(fake.requests) == 1
+    row = engine.store.file(film)
+    assert row["status"] == plans.UNKNOWN_AUDIO  # a suggestion, nothing tagged
+    assert {i: (g["language"], g["by"]) for i, g in engine.guesses(row).items()} == {2: ("ita", "Whisper")}
+
+
+@needs_tools
+def test_auto_tag_waits_for_a_check_unless_very_sure(library, engine, monkeypatch):
+    from core import plan as plans
+    from core.engine import AUTO_TAGGED
+    unsure = make_video(str(library / "a.mkv"), audio=("eng", ""))
+    engine.scan()
+    monkeypatch.setattr(config, "auto_tag_confidence", 90)
+    fake = whisper_says(monkeypatch, "it", 0.93)
+    try:
+        engine.detect_pass()
+    finally:
+        fake.close()
+    row = engine.store.file(unsure)
+    assert [t["language"] for t in row["info"]["tracks"] if t["type"] == "audio"] == ["eng", "ita"]
+    # Italian isn't wanted, but the guess could be wrong: nothing is removed until it's checked
+    assert row["status"] == AUTO_TAGGED and "93% sure" in row["message"]
+    assert engine.store.history()[1][0]["state"] == "tagged"
+    engine.looks_right(unsure, wait=True)
+    assert engine.store.file(unsure)["status"] == plans.CHANGE
+
+    sure = make_video(str(library / "b.mkv"), audio=("eng", ""))
+    engine.scan()
+    fake = whisper_says(monkeypatch, "it", 0.99)
+    try:
+        engine.detect_pass()
+    finally:
+        fake.close()
+    assert engine.store.file(sure)["status"] == plans.CHANGE  # sure enough to skip the wait
+
+
+@needs_tools
+def test_accept_all_and_tagging_by_hand(library, engine, monkeypatch):
+    from core import plan as plans
+    from core.engine import AUTO_TAGGED
+    low = make_video(str(library / "low.mkv"), audio=("eng", ""))
+    high = make_video(str(library / "high.mkv"), audio=("eng", ""))
+    engine.scan()
+    fake = whisper_says(monkeypatch, "it", 0.8)
+    try:
+        engine.guess_file(engine.store.file(low))
+    finally:
+        fake.close()
+    fake = whisper_says(monkeypatch, "it", 0.92)
+    try:
+        engine.guess_file(engine.store.file(high))
+    finally:
+        fake.close()
+    engine.accept_guesses(90)
+    assert engine.store.file(low)["status"] == plans.UNKNOWN_AUDIO  # 80% stays a suggestion
+    assert engine.store.file(high)["status"] == AUTO_TAGGED
+    # Tagging by hand means you've looked at it
+    engine.tag(high, {"2": "fra"})
+    assert engine.store.file(high)["status"] == plans.CHANGE
