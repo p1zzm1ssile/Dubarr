@@ -130,7 +130,7 @@ api("/api/session").then((s) => {
 
 const STATUS_STYLE = {
   change: "info", not_bazarr: "info", seeding: "", no_wanted_audio: "warn", unknown_audio: "warn", unknown_subtitles: "warn", unknown_original: "warn", original_only: "ok", too_small: "",
-  error: "bad", no_audio: "", clean: "ok", ignored: "",
+  error: "bad", no_audio: "", clean: "ok", ignored: "", auto_tagged: "warn",
 };
 
 const STATUS_HELP = {
@@ -140,6 +140,7 @@ const STATUS_HELP = {
   no_wanted_audio: "None of the audio is in a language you keep, so Dubarr leaves these alone. Replace them in Radarr or Sonarr if you want them in your language.",
   unknown_audio: "At least one audio track has no language tag, so Dubarr can't tell what it is and leaves the file alone. Press Listen & tag to hear it and set its language; the tag is written into the file, so it won't come back here.",
   unknown_subtitles: "Nothing to remove, but a subtitle track has no language tag. Press Listen & tag to read a few lines and set its language, so Dubarr knows whether to keep it.",
+  auto_tagged: "Tagged from a detected language, which could be wrong, so Dubarr hasn't removed any tracks yet. Press Check tracks to listen, then Looks right to let Dubarr change the file as usual. After 7 days it goes ahead by itself.",
   unknown_original: "Nothing else to remove, but there's audio in another language that might be the original, and Always keep the original language audio is on. Connect Radarr or Sonarr so Dubarr knows the original language.",
   original_only: "None of your languages, but the audio in the original language is kept, e.g. Japanese-only anime. Nothing to do, unless you'd rather find a dubbed copy in Radarr or Sonarr.",
   error: "Files that couldn't be read or changed. The original is always left as it was.",
@@ -217,27 +218,39 @@ function languageSelect(current) {
     options.map(([code, name]) => el("option", { value: code, text: name, selected: code === current })));
 }
 
-// Ask Whisper, Ollama or the built-in detector for a track's language, and offer it as a suggestion
+// A suggested language, with a button to choose it in the track's language list
+function suggestion(g, select) {
+  const use = el("button", { type: "button", text: `Use ${g.name}` });
+  use.addEventListener("click", () => {
+    select().value = g.language;
+    use.disabled = true;
+    use.textContent = `${g.name} chosen. Press Save tags`;
+  });
+  return el("div", { class: `detect-result ${g.sure ? "" : "unsure"}` },
+    el("span", { text: `${g.by} thinks it's ${g.name} (${Math.round(g.confidence * 100)}% sure). `
+      + (g.sure ? "" : "Not very sure: listen or read to check before using it. ") }), use);
+}
+
+// Ask Whisper, Ollama or the built-in detector for a track's language, and offer it as a suggestion.
+// Asking again listens to parts of the film it hasn't heard yet, in case music fooled it.
 function detectButton(file, t, preview, select) {
   if (!(t.type === "audio" ? detection.audio : detection.subtitles)) return null;
   const button = el("button", { type: "button", text: "Detect", title: t.type === "audio"
     ? "Whisper listens to a sample and suggests the language" : "Reads some lines and suggests the language" });
+  let start = 0;
   button.addEventListener("click", async () => {
     button.disabled = true;
     preview.replaceChildren(el("div", { class: "muted small", text: t.type === "audio"
-      ? "Listening… Whisper can take a little while, and tries other parts of the film if there's no talking."
+      ? (start ? "Listening to other parts of the film…" : "Listening… Whisper can take a little while, and tries other parts of the film if there's no talking.")
       : "Reading…" }));
     try {
-      const g = await post("/api/detect", { path: file.path, index: t.index });
-      const use = el("button", { type: "button", text: `Use ${g.name}` });
-      use.addEventListener("click", () => {
-        select().value = g.language;
-        use.disabled = true;
-        use.textContent = `${g.name} chosen. Press Save tags`;
-      });
-      preview.replaceChildren(el("div", { class: `detect-result ${g.sure ? "" : "unsure"}` },
-        el("span", { text: `${g.by} thinks it's ${g.name} (${Math.round(g.confidence * 100)}% sure). `
-          + (g.sure ? "" : "Not very sure: listen or read to check before using it. ") }), use));
+      const g = await post("/api/detect", { path: file.path, index: t.index, start });
+      preview.replaceChildren(suggestion(g, select));
+      if (t.type === "audio") {
+        start += 3;
+        button.textContent = "Detect again";
+        button.title = "Listens to other parts of the film";
+      }
     } catch (e) {
       preview.replaceChildren(el("div", { class: "error-text", text: e.message }));
     } finally {
@@ -288,6 +301,8 @@ function tagPanel(file, onSaved) {
     }
     selects[t.index] = languageSelect(t.language);
     const detect = detectButton(file, t, preview, () => selects[t.index]);
+    const guess = (file.guesses || {})[t.index];
+    if (guess && t.language === "und") preview.replaceChildren(suggestion(guess, () => selects[t.index]));
     removeTrack[t.index] = el("input", { type: "checkbox", "aria-label": `Remove track ${t.index}` });
     const details = [t.type === "audio" ? "Audio" : "Subtitles", `track ${t.index}`, t.codec,
       t.channels ? `${t.channels} ch` : "", t.title ? `“${t.title}”` : "",
@@ -341,7 +356,7 @@ function tagPanel(file, onSaved) {
     if (!Object.keys(tags).length) { flash(result, false, "Choose a language for at least one track first"); return; }
     save.disabled = true;
     result.className = "result muted";
-    result.textContent = isMp4 ? "Writing a tagged copy…" : "Saving…";
+    result.textContent = "Saving…";
     try {
       const r = await post("/api/tag", { path: file.path, tags });
       flash(result, true, r.message);
@@ -377,10 +392,27 @@ async function showDashboard(selected) {
   const listTitle = el("h2");
   const listHelp = el("p", { class: "muted small" });
   const applyAll = el("button", { type: "button", class: "primary" });
+  // Accept all: tag every untagged track whose suggestion is at least this sure
+  const acceptLevel = el("input", { type: "number", min: 50, max: 100, value: 90, "aria-label": "How sure, in percent",
+    class: "accept-level" });
+  const acceptButton = el("button", { type: "button", class: "primary" });
+  const accept = el("span", { class: "accept-all" }, acceptButton, acceptLevel, "% sure or more");
+  const labelAccept = () => {
+    acceptButton.textContent = library ? `Accept all in ${library} at least` : "Accept all at least";
+    accept.hidden = !["unknown_audio", "unknown_subtitles"].includes(status) || !currentCount
+      || !(detection.audio || detection.subtitles);
+  };
+  acceptButton.addEventListener("click", () => {
+    const minimum = Number(acceptLevel.value);
+    if (!(minimum >= 50 && minimum <= 100)) { flash(listResult, false, "Pick a level from 50% to 100%"); return; }
+    if (!confirm(`Tag every untagged track whose suggestion is at least ${minimum}% sure${library ? ` in ${library}` : ""}? `
+      + "Files tagged this way wait under Tagged automatically before any tracks are removed, unless the guess passes the level set in Settings > Language detection.")) return;
+    act("/api/accept", { minimum, library: library || null }, acceptButton);
+  });
   // "" for every library, or the one library to list and apply
   let library = "";
   const librarySelect = el("select", { "aria-label": "Library", class: "library-select" });
-  librarySelect.addEventListener("change", () => { library = librarySelect.value; labelApplyAll(); loadFiles(false); });
+  librarySelect.addEventListener("change", () => { library = librarySelect.value; labelApplyAll(); labelAccept(); loadFiles(false); });
   let currentCount = 0;
   const table = el("table");
   const more = el("div");
@@ -391,7 +423,7 @@ async function showDashboard(selected) {
     notices, activity, stats, tiles,
     el("div", { class: "panel" },
       listTitle, listHelp,
-      el("div", { class: "toolbar" }, el("div", { style: "flex:1;min-width:200px" }, search), librarySelect, applyAll, listResult),
+      el("div", { class: "toolbar" }, el("div", { style: "flex:1;min-width:200px" }, search), librarySelect, applyAll, accept, listResult),
       el("div", { style: "overflow-x:auto" }, table), more));
 
   async function act(path, body, button, done) {
@@ -426,6 +458,19 @@ async function showDashboard(selected) {
         b.addEventListener("click", () => act("/api/recheck", { path: f.path }, b));
         actions.push(b);
       }
+      if (f.status === "auto_tagged" && !f.ignored) {
+        const b = el("button", { type: "button", class: "primary", text: "Looks right",
+          title: "You've checked the tags: let Dubarr change this file as usual" });
+        b.addEventListener("click", () => act("/api/looks-right", { path: f.path }, b));
+        actions.push(b);
+      }
+      const suggested = Object.entries(f.guesses || {}).filter(([i]) => f.tracks.some((t) => String(t.index) === i && t.language === "und"));
+      if (suggested.length && !f.ignored) {
+        const b = el("button", { type: "button", text: "Use suggestions",
+          title: suggested.map(([i, g]) => `Track ${i}: ${g.name} (${Math.round(g.confidence * 100)}%)`).join(", ") });
+        b.addEventListener("click", () => act("/api/tag", { path: f.path, tags: Object.fromEntries(suggested.map(([i, g]) => [i, g.language])) }, b));
+        actions.push(b);
+      }
       const panel = el("div");
       const untagged = f.tracks.some((t) => t.language === "und");
       if (f.tracks.length) {
@@ -445,6 +490,10 @@ async function showDashboard(selected) {
           el("div", { class: "title", text: name }),
           el("div", { class: "path mono", text: folder }),
           el("div", { class: "small", text: f.message + (f.saved_bytes ? ` · saves ${bytes(f.saved_bytes)}` : "") }),
+          suggested.length ? el("div", { class: "small suggested", text: "Suggested: " + suggested.map(([i, g]) => {
+            const t = f.tracks.find((x) => String(x.index) === i);
+            return `${t.type === "audio" ? "audio" : "subtitles"} track ${i} ${g.name} (${Math.round(g.confidence * 100)}%, ${g.by})`;
+          }).join(", ") }) : null,
           f.tracks.length || (f.files || []).length ? trackChips(f) : null,
           panel),
         el("td", { class: "actions" }, el("div", { class: "action-stack" }, actions)));
@@ -462,7 +511,7 @@ async function showDashboard(selected) {
   async function loadFiles(append) {
     const params = new URLSearchParams({ status, search: search.value.trim(), offset: append ? shown.length : 0, library });
     const r = await api(`/api/files?${params}`);
-    if (r.detect) detection = r.detect;
+    if (r.detect) { detection = r.detect; labelAccept(); }
     shown = append ? shown.concat(r.files) : r.files;
     total = r.total;
     renderRows();
@@ -545,6 +594,7 @@ async function showDashboard(selected) {
     currentCount = current.files;
     applyAll.hidden = !["change", "not_bazarr"].includes(status) || !current.files;
     labelApplyAll();
+    labelAccept();
     if (!openPanels.size) await loadFiles(false);
   }
 
@@ -582,7 +632,7 @@ async function showDashboard(selected) {
 
 const STATE_LABEL = {
   done: "Original kept", restored: "Restored", purged: "Original emptied from recycle folder",
-  deleted: "Original deleted", failed: "Failed", swapping: "In progress",
+  deleted: "Original deleted", failed: "Failed", swapping: "In progress", tagged: "Tagged in place",
 };
 
 async function showHistory() {

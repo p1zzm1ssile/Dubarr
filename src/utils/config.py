@@ -294,6 +294,19 @@ FIELDS = [
       section="Subtitles",
       help="Only if Ollama is behind a proxy that asks for one. It's sent as a Bearer token, and only to an https:// "
            "address, so it can't be read on the network."),
+    F("detect_in_background", "detection", "Detect untagged tracks in the background", "bool",
+      env_bool("DETECT_IN_BACKGROUND", default=True), section="In the background",
+      help="Dubarr works through the Untagged audio and Untagged subtitles lists by itself, at low priority, so each "
+           "track already shows a suggestion when you open them."),
+    F("auto_tag_confidence", "detection", "Tag automatically when at least this sure (%)", "int",
+      env_int("AUTO_TAG_CONFIDENCE", default=0), section="In the background", min=0, max=100,
+      help="0 is off: suggestions wait for you. 90 is a good start. Every automatic tag is listed in History. "
+           "Guesses below this stay as suggestions, and Accept all on the Dashboard tags those above a level you pick."),
+    F("trust_confidence", "detection", "Change files straight away when at least this sure (%)", "int",
+      env_int("TRUST_CONFIDENCE", default=97), section="In the background", min=50, max=100,
+      help="A wrong tag could make Dubarr remove the wrong track. So a file tagged automatically or with Accept all "
+           "is listed under \"Tagged automatically\" and its tracks aren't removed until you press Looks right, or for "
+           "7 days. Guesses at least this sure skip the wait. 100 means always wait."),
 ]
 
 def with_scheme(url):

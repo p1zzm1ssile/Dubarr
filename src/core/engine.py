@@ -12,7 +12,7 @@ from contextlib import contextmanager
 
 import utils.config as config
 from core import plan as plans
-from core import swap, tagging
+from core import detect, swap, tagging
 from core.plan import NOT_FROM_BAZARR, Plan, Rules, _removal, decide
 from core.probe import PROBE_VERSION, MediaInfo, ProbeError, find_sidecars, probe
 from core.remux import RemuxError, remux, supported
@@ -27,8 +27,10 @@ SEEDING = "seeding"   # would change, but it's hardlinked and probably still see
 TOO_SMALL = "too_small"  # would change, but would save less than the minimum set
 ERROR = "error"       # couldn't be read or changed
 NOT_BAZARR = "not_bazarr"  # only subtitle files Bazarr didn't download to remove
+AUTO_TAGGED = "auto_tagged"  # tagged from a guess: tracks wait until you've checked it
 
 APPLY_EVERY_SECONDS = 600
+DETECT_EVERY_SECONDS = 600
 
 
 class Busy(Exception):
@@ -138,6 +140,8 @@ class Engine:
         self.last_apply = 0.0
         self.last_purge = 0.0
         self.last_subtitles = 0.0
+        self.last_detect = 0.0
+        self._detecting = threading.Lock()  # background detection only reads files, so it runs beside jobs
         self._services = {}
         self._unreachable = {}  # Radarr, Sonarr or Jellyfin: when to try asking them again
 
@@ -321,6 +325,11 @@ class Engine:
                 if files_only.remove_files:
                     status, plan = plans.CHANGE, files_only
                     message = f"{files_only.message}. The rest waits: {waiting[0].lower()}{waiting[1:]}"
+        # A tag set from a guess could be wrong, and a wrong tag could remove the wrong track: wait for a check
+        held = self.store.held(path) if plan.rewrites else None
+        if held:
+            status = AUTO_TAGGED
+            message = f"{held['message']}. Press Looks right to let Dubarr change it: {plan.message[0].lower()}{plan.message[1:]}"
         # Only subtitle files Bazarr didn't download: their own list, removed by hand or by their own setting
         if (status == plans.CHANGE and not plan.rewrites and plan.remove_files
                 and all(f["reason"] == NOT_FROM_BAZARR for f in plan.remove_files)):
@@ -385,6 +394,9 @@ class Engine:
                     status = self.check_file(library, path, reread=True)
                     counts[status] = counts.get(status, 0) + 1
 
+            # Newly found untagged tracks get their suggestions at the next minute's check, not in 10 minutes
+            if counts.get(plans.UNKNOWN_AUDIO) or counts.get(plans.UNKNOWN_SUBTITLES):
+                self.last_detect = 0.0
             found = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in sorted(counts.items(), key=str) if k)
             logger.info(f"Scan ({trigger}) checked {sum(counts.values())} file(s) in {time.time() - started:.0f}s"
                         + (f": {found}" if found else ""))
@@ -693,8 +705,34 @@ class Engine:
             raise tagging.TagError("Dubarr doesn't know this file. Scan first")
         return MediaInfo.from_dict(row["info"])
 
-    def tag(self, path, changes, wait=False):
-        """Set the language of tracks, e.g. {2: "eng", 4: "fra"}. Returns what was done."""
+    def tags_wanted(self, path, changes):
+        """Check a tagging request against what's known of the file. Returns {index: code} of the tags that differ
+        from what's there now. Raises TagError if it can't be done."""
+        if not self.library_for(path):
+            raise tagging.TagError("This file isn't in a library set up in Dubarr")
+        info = self.known_file(path)
+        current = {t.index: t.language for t in info.tracks}
+        wanted = {}
+        for index, code in changes.items():
+            try:
+                index = int(index)
+            except (TypeError, ValueError):
+                raise tagging.TagError(f"{index} isn't a track number")
+            track = next((t for t in info.tracks if t.index == index), None)
+            if not track or track.type not in ("audio", "subtitle"):
+                raise tagging.TagError(f"Track {index} isn't an audio or subtitle track")
+            if not tagging.valid_tag(code):
+                raise tagging.TagError(f"{code} isn't a language Dubarr knows")
+            if current.get(index) != code:
+                wanted[index] = code
+        return wanted
+
+    def tag(self, path, changes, wait=False, guesses=None):
+        """Set the language of tracks, e.g. {2: "eng", 4: "fra"}. Returns what was done.
+
+        guesses ({index: guess}) says the tags come from detection rather than from you. Unless every one is at
+        least trust_confidence sure, the file then waits under Tagged automatically before tracks are removed.
+        Tags you set yourself mean you've looked at the file, so any such wait ends."""
         with self.job("Tagging", wait=wait):
             self.activity["detail"] = path
             library = self.library_for(path)
@@ -702,17 +740,7 @@ class Engine:
                 raise tagging.TagError("This file isn't in a library set up in Dubarr")
             self.check_file(library, path, reread=True)
             info = self.known_file(path)
-            current = {t.index: t.language for t in info.tracks}
-            wanted = {}
-            for index, code in changes.items():
-                index = int(index)
-                track = next((t for t in info.tracks if t.index == index), None)
-                if not track or track.type not in ("audio", "subtitle"):
-                    raise tagging.TagError(f"Track {index} isn't an audio or subtitle track")
-                if not tagging.valid_tag(code):
-                    raise tagging.TagError(f"{code} isn't a language Dubarr knows")
-                if current.get(index) != code:
-                    wanted[index] = code
+            wanted = self.tags_wanted(path, changes)
             if not wanted:
                 return "Nothing to change"
 
@@ -722,25 +750,105 @@ class Engine:
                                        "the torrent's data too. Try again once seeding stops")
 
             message = tagging.describe_changes(info, wanted)
+            if guesses:
+                used = [guesses[i] for i in wanted]
+                message += " automatically (" + ", ".join(
+                    f"{g['by']} {round(g['confidence'] * 100)}% sure" for g in used) + ")"
+                held = any(g["confidence"] * 100 < config.trust_confidence for g in used)
+                self.store.set_auto_tags(path, message, held)
+            else:
+                self.store.release(path)
             try:
                 if path.lower().endswith((".mkv", ".mk3d")):
                     tagging.tag_mkv(info, wanted)
+                    if guesses:
+                        self.store.add_tag_history(path, message)
                 else:
                     new = tagging.retag_mp4(info, wanted)
                     swap.swap(self.store, None, path, info.size, new.size, message, [],
                               swap.recycle_root(library["path"], config.recycle_folder), config.recycle_days)
-            except tagging.TagError as e:
-                logger.error(f"Couldn't tag {path}: {e}. The original is untouched")
-                raise
-            except (RemuxError, swap.SwapError, OSError) as e:
+            except (tagging.TagError, RemuxError, swap.SwapError, OSError) as e:
+                if guesses:
+                    self.store.release(path)
                 reason = getattr(e, "strerror", None) or str(e)
-                logger.error(f"Couldn't tag {path}: {reason}")
-                raise tagging.TagError(reason)
+                logger.error(f"Couldn't tag {path}: {reason}. The original is untouched")
+                raise e if isinstance(e, tagging.TagError) else tagging.TagError(reason)
 
             logger.log("ACTION", f"{message} in {path}")
             self.check_file(library, path, reread=True)
             self.notify(path)
             return message
+
+    def looks_right(self, path, wait=False):
+        """You've checked a file tagged automatically: its tracks can be changed as usual."""
+        self.store.release(path)
+        self.scan("manual", [path], wait=wait)
+
+    # Detecting languages
+
+    def guesses(self, row):
+        """{track index: guess} for a file as it is now, without the ones that failed."""
+        return {i: g for i, g in self.store.guesses(row["path"], row["size"], row["mtime"]).items() if g["language"]}
+
+    def guess_file(self, row):
+        """Detect the language of a file's untagged tracks that haven't been tried yet. Returns its guesses.
+        Raises ServiceError if Whisper or Ollama can't be reached, so the rest can wait."""
+        info = MediaInfo.from_dict(row["info"])
+        tried = self.store.guesses(row["path"], row["size"], row["mtime"])
+        for t in info.tracks:
+            if t.language != "und" or t.index in tried or not detect.can_detect(t):
+                continue
+            try:
+                g = detect.detect(info, t.index)
+                self.store.save_guess(row["path"], t.index, row["size"], row["mtime"], g["language"],
+                                      g["confidence"], g["by"])
+            except (detect.DetectError, tagging.TagError) as e:
+                self.store.save_guess(row["path"], t.index, row["size"], row["mtime"], error=str(e))
+        return self.guesses(row)
+
+    def detect_pass(self):
+        """Work through the untagged lists in the background, keeping a suggestion for each track, and tag the
+        ones sure enough if that's turned on. Only reads files, so jobs carry on beside it; tagging waits its turn."""
+        if not self._detecting.acquire(blocking=False):
+            return
+        try:
+            self.last_detect = time.time()
+            if not config.detect_in_background:
+                return
+            _, rows = self.store.files(statuses=[plans.UNKNOWN_AUDIO, plans.UNKNOWN_SUBTITLES], ignored=False,
+                                       limit=1_000_000)
+            for row in rows:
+                if not config.detect_in_background or not row["info"]:
+                    continue
+                try:
+                    found = self.guess_file(row)
+                except detect.ServiceError as e:
+                    logger.warning(f"Background language detection: {e}. Trying again in 10 minutes")
+                    return
+                minimum = config.auto_tag_confidence
+                sure = {i: g for i, g in found.items() if minimum and g["confidence"] * 100 >= minimum}
+                if sure:
+                    self._tag_guesses(row["path"], sure)
+        finally:
+            self._detecting.release()
+
+    def _tag_guesses(self, path, guesses):
+        try:
+            return self.tag(path, {i: g["language"] for i, g in guesses.items()}, wait=True, guesses=guesses)
+        except (tagging.TagError, OSError) as e:
+            logger.warning(f"Couldn't tag {path} from its suggestions: {e}")
+            return None
+
+    def accept_guesses(self, minimum, library=None, wait=True):
+        """Tag every untagged track whose suggestion is at least minimum percent sure (Accept all)."""
+        _, rows = self.store.files(statuses=[plans.UNKNOWN_AUDIO, plans.UNKNOWN_SUBTITLES], ignored=False,
+                                   limit=1_000_000, library=library)
+        tagged = 0
+        for row in rows:
+            sure = {i: g for i, g in self.guesses(row).items() if g["confidence"] * 100 >= minimum}
+            if sure and self._tag_guesses(row["path"], sure) not in (None, "Nothing to change"):
+                tagged += 1
+        logger.log("ACTION", f"Accept all: tagged {tagged} file(s) from suggestions at least {minimum}% sure")
 
     def purge(self):
         count = swap.purge(self.store, config.recycle_days)
@@ -840,6 +948,8 @@ class Engine:
     def tick(self):
         """Called every minute: scan when it's due, change files when allowed, empty the recycle folder daily."""
         now = time.time()
+        if now - self.last_detect >= DETECT_EVERY_SECONDS and not self._detecting.locked():
+            threading.Thread(target=self.detect_pass, daemon=True).start()
         if self.busy():
             return
         try:

@@ -13,7 +13,7 @@ import requests
 
 import utils.config as config
 from core.probe import MediaInfo
-from core.tagging import TagError, audio_sample, subtitle_lines
+from core.tagging import TEXT_SUBTITLES, TagError, audio_sample, subtitle_lines
 from services.connections import ServiceError, _error
 from utils.languages import LANGUAGES, name, normalise
 from utils.proc import wrap
@@ -78,12 +78,13 @@ def _whisper(cfg, sample: bytes) -> dict:
                     params={"encode": "true"}, files={"audio_file": ("sample.mp3", sample, "audio/mpeg")})
 
 
-def detect_audio(info: MediaInfo, index: int, cfg=config) -> dict:
-    """Whisper's best guess for an audio track, from up to AUDIO_TRIES samples."""
+def detect_audio(info: MediaInfo, index: int, cfg=config, start: int = 0) -> dict:
+    """Whisper's best guess for an audio track, from up to AUDIO_TRIES samples. start is the first part of the
+    film to listen to, so asking again listens somewhere new."""
     if not audio_enabled(cfg):
         raise DetectError("Whisper isn't turned on. It's on the Language detection tab in Settings")
     best = None
-    for part in range(AUDIO_TRIES):
+    for part in range(start, start + AUDIO_TRIES):
         answer = _whisper(cfg, audio_sample(info, index, part=part))
         code = normalise(str(answer.get("language_code") or ""))
         try:
@@ -147,10 +148,17 @@ def detect_subtitles(info: MediaInfo, index: int, cfg=config) -> dict:
     return _guess(code, confidence, by)
 
 
-def detect(info: MediaInfo, index: int, cfg=config) -> dict:
+def can_detect(track, cfg=config) -> bool:
+    """Whether a track's language can be detected with the settings as they are."""
+    if track.type == "audio":
+        return audio_enabled(cfg)
+    return track.type == "subtitle" and subtitles_enabled(cfg) and track.codec in TEXT_SUBTITLES
+
+
+def detect(info: MediaInfo, index: int, cfg=config, start: int = 0) -> dict:
     for t in info.tracks:
         if t.index == index and t.type == "audio":
-            return detect_audio(info, index, cfg)
+            return detect_audio(info, index, cfg, start)
         if t.index == index and t.type == "subtitle":
             return detect_subtitles(info, index, cfg)
     raise TagError(f"Track {index} isn't an audio or subtitle track in this file")

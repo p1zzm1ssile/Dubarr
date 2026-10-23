@@ -39,6 +39,8 @@ Video, chapters, fonts and anything that isn't audio or subtitles is always kept
 | Whisper (`ASR_MODEL`) | `small` | `base` | `medium` or `large-v3` |
 | Ollama (subtitles only) | `qwen2.5:3b` or `gemma3:4b` | `qwen2.5:3b` | either |
 
+**In the background:** Dubarr works through the untagged lists by itself, so each film already shows its suggestion, with *Use suggestions* to confirm it in one click. Pressing *Detect* again listens to other parts of the film. *Accept all* tags every suggestion above a level you pick, and Settings > Language detection can do that by itself (*Tag automatically when at least this sure*). As a wrong tag could get the wrong track removed, a file tagged that way waits under *Tagged automatically* until you press *Looks right*, or for 7 days, unless the guess passed *Change files straight away when at least this sure* (97% by default). Every automatic tag is listed in History.
+
 Never use Whisper's `.en` models, which only know English. Avoid 1B Ollama models, which make up language codes. Whisper and Ollama don't need a key; if yours is behind a proxy that asks for one, Dubarr only sends it to an `https://` address, never follows redirects with it, and keeps it out of the logs and the browser.
 
 **Removing a track by hand:** press *Check tracks* on the Dashboard, tick *Remove* on any audio or subtitle track, or subtitle file, and press *Remove ticked*. With Bazarr connected, each subtitle file says whether Bazarr downloaded it, and from where (OpenSubtitles.com, say).
