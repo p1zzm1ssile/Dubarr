@@ -323,6 +323,18 @@ class Handler(BaseHTTPRequestHandler):
                     status = NOT_BAZARR if data.get("status") == NOT_BAZARR else None
                     engine.background(engine.apply, "manual", paths, True, library=library, status=status)
                     return self.send(200, {"ok": True, "message": "Changing files"})
+                if path == "/api/replace":
+                    paths = data.get("paths") or None
+                    if paths is not None and (not isinstance(paths, list) or not all(isinstance(p, str) for p in paths)):
+                        raise ValueError("paths must be a list")
+                    library = data.get("library") or None
+                    if library and library not in [lib["path"] for lib in config.library_list]:
+                        raise ValueError("That library isn't set up in Dubarr")
+                    if not (engine._service("radarr") or engine._service("sonarr")):
+                        raise ValueError("Set up Radarr or Sonarr first: they delete the file and search for another copy")
+                    engine.background(engine.replace_no_audio, "manual", paths, library)
+                    return self.send(200, {"ok": True, "message": "Asking Radarr or Sonarr to replace them. "
+                                           "They show under History as they're done"})
                 if path == "/api/remove":
                     file, tracks, files = data.get("path", ""), data.get("tracks") or [], data.get("files") or []
                     if not isinstance(tracks, list) or not isinstance(files, list):

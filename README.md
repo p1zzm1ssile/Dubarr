@@ -21,6 +21,7 @@ It's built to be safe to leave running:
 | Languages you keep, plus others | Removes the others (audio and subtitles, each can be turned off) |
 | No audio in a language you keep | Leaves it alone, flags it |
 | An audio track with no language tag | Leaves it alone, flags it until you tag it |
+| No audio at all | Lists it under *No audio*, where Replace has Radarr or Sonarr delete it and search for another copy (or turn on *Replace files with no audio by themselves*) |
 | Audio in the film's original language, e.g. Japanese for anime | Keeps it too, if *Always keep the original language audio* is on |
 | Commentary tracks | Removes them (can be turned off) |
 | Several audio tracks in one language | Keeps the best-quality one (can be turned off) |
@@ -50,6 +51,8 @@ Never use Whisper's `.en` models, which only know English. Avoid 1B Ollama model
 Languages are set once for everything, and can be overridden per library, e.g. Japanese + English audio for an anime folder.
 
 **Original language audio:** turn on *Always keep the original language audio* in Settings > General to keep a film's original audio alongside your languages, without listing every language films are made in. Dubarr asks Radarr or Sonarr for the original language, or failing that uses an audio track flagged as the original. If neither says, Dubarr removes no audio languages from that file and lists it under *Original language unknown*. A film with none of your languages but with its original audio, like Japanese-only anime, isn't flagged: it's listed under *Original language only*, and other languages are still removed from it. It's also tagged `original-language-only` in Radarr, Sonarr and Jellyfin (change or turn off the tag in Settings > General), so you can filter by it there.
+
+**Files with no audio:** a file with no audio tracks at all is usually a bad download. Press *Replace* on it, or *Replace all*, under *No audio* on the Dashboard: Radarr or Sonarr deletes the file (into their recycle bin, if you set one there), blocklists the release it came from when their history shows it, and searches for another copy. *Replace files with no audio by themselves* in Settings > General does this every 10 minutes (off by default, and Report only stops it). Files Radarr and Sonarr don't have, like extras, are left alone.
 
 MKV files are rewritten with mkvmerge (keeps Dolby Vision, HDR10+, fonts, chapters and tags). MP4 files are rewritten with ffmpeg.
 

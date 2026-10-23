@@ -198,6 +198,12 @@ FIELDS = [
       help="A hardlinked file is usually still seeding in your torrent client. Changing it breaks the link, "
            "so the film takes up space twice until the torrent is removed. Off: wait until seeding stops."),
 
+    F("replace_no_audio", "general", "Replace files with no audio by themselves", "bool",
+      env_bool("REPLACE_NO_AUDIO", default=False), section="Changing files",
+      help="A file with no audio at all is deleted through Radarr or Sonarr, which then search for another copy. "
+           "The release it came from is blocklisted when it can be found, so the same one isn't picked again. "
+           "Off: they're listed under No audio for you to replace. Report only stops this too."),
+
     # General: recycle folder
     F("recycle_days", "general", "Keep originals for (days)", "int",
       env_int("RECYCLE_DAYS", default=7), section="Recycle folder", min=0, max=365,

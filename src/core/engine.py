@@ -141,6 +141,7 @@ class Engine:
         self.last_purge = 0.0
         self.last_subtitles = 0.0
         self.last_detect = 0.0
+        self.last_replace = 0.0
         self._detecting = threading.Lock()  # background detection only reads files, so it runs beside jobs
         self._services = {}
         self._unreachable = {}  # Radarr, Sonarr or Jellyfin: when to try asking them again
@@ -540,6 +541,58 @@ class Engine:
         self.check_file(library, path, reread=True)
         self.notify(path)
         return saved
+
+    def replace_no_audio(self, trigger="manual", paths=None, library=None, wait=False):
+        """Have Radarr or Sonarr delete files with no audio and search for another copy. Each file is read again
+        first, so only one that really has no audio goes."""
+        with self.job("Replacing files with no audio", wait=wait):
+            self.last_replace = time.time()
+            if paths:
+                rows = [r for r in (self.store.file(p) for p in paths) if r and r["status"] == plans.NO_AUDIO]
+            else:
+                _, rows = self.store.files(statuses=[plans.NO_AUDIO], ignored=False, limit=1_000_000, library=library)
+            rows = [r for r in rows if not r["ignored"]]
+            arrs = [a for a in (self._service(k) for k in ("radarr", "sonarr")) if a]
+            if not rows:
+                return
+            if not arrs:
+                logger.warning("Files with no audio are replaced through Radarr or Sonarr, and neither is set up")
+                return
+            self.activity["total"] = len(rows)
+            replaced = 0
+            for row in rows:
+                if self._stop.is_set():
+                    break
+                path = row["path"]
+                self.activity["detail"] = path
+                self.activity["done"] += 1
+                if self._replace_one(path, arrs):
+                    replaced += 1
+            if replaced:
+                logger.log("ACTION", f"Replaced {replaced} file(s) with no audio through Radarr or Sonarr")
+
+    def _replace_one(self, path, arrs):
+        library = self.library_for(path)
+        if not library or self.check_file(library, path, reread=True) != plans.NO_AUDIO:
+            return False
+        file_size = os.path.getsize(path)
+        for arr in arrs:
+            try:
+                result = arr.replace(path)
+            except ServiceError as e:
+                logger.error(f"Couldn't have {arr.name} replace {path}: {e}")
+                return False
+            if result:
+                title, blocklisted = result
+                message = (f"Deleted by {arr.name}, as it has no audio. {arr.name} is searching for another copy"
+                           + (" and won't pick the same release again" if blocklisted else ""))
+                self.store.add_replaced_history(path, file_size, message)
+                self.store.forget(path)
+                logger.log("ACTION", f"{arr.name} deleted {title} ({path}), which has no audio, and is searching "
+                           "for another copy" + (". The release it came from is blocklisted" if blocklisted else ""))
+                return True
+        logger.warning(f"{path} has no audio, but neither Radarr nor Sonarr has it, so it's left alone")
+        return False
 
     def remove_other_subtitles(self, trigger="scheduled", wait=False):
         """Remove the subtitle files Bazarr didn't download, from every file that has some, without changing the
@@ -960,6 +1013,9 @@ class Engine:
             if (config.bazarr_other_subtitles == config.OTHER_SUBTITLES_AUTO
                     and now - self.last_subtitles >= APPLY_EVERY_SECONDS):
                 self.remove_other_subtitles("scheduled")
+            if (config.replace_no_audio and not config.report_only
+                    and now - self.last_replace >= APPLY_EVERY_SECONDS):
+                self.replace_no_audio("scheduled")
             if now - self.last_purge >= 24 * 3600:
                 with self.job("Emptying the recycle folder"):
                     self.purge()

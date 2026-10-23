@@ -144,7 +144,7 @@ const STATUS_HELP = {
   unknown_original: "Nothing else to remove, but there's audio in another language that might be the original, and Always keep the original language audio is on. Connect Radarr or Sonarr so Dubarr knows the original language.",
   original_only: "None of your languages, but the audio in the original language is kept, e.g. Japanese-only anime. Nothing to do, unless you'd rather find a dubbed copy in Radarr or Sonarr.",
   error: "Files that couldn't be read or changed. The original is always left as it was.",
-  no_audio: "Files with no audio at all.",
+  no_audio: "Files with no audio at all, usually a bad download. Press Replace to have Radarr or Sonarr delete the file and search for another copy, skipping the release it came from. Deleted files go to their recycle bin, if one is set there. Settings can do this by itself.",
   clean: "Only languages you keep. Nothing to do.",
   too_small: "These would save less than the minimum set in Settings, and rewriting a whole film for a few KB isn't worth the wear on the array. Apply one by hand if you want it anyway, or lower the setting.",
   ignored: "Files you restored. Dubarr leaves them alone until you say otherwise.",
@@ -444,6 +444,15 @@ async function showDashboard(selected) {
     const rows = shown.map((f) => {
       const [folder, name] = splitPath(f.path);
       const actions = [];
+      if (f.status === "no_audio" && !f.ignored) {
+        const b = el("button", { type: "button", class: "danger", text: "Replace",
+          title: "Radarr or Sonarr deletes this file and searches for another copy" });
+        b.addEventListener("click", () => {
+          if (!confirm(`Have Radarr or Sonarr delete ${name} and search for another copy?`)) return;
+          act("/api/replace", { paths: [f.path] }, b);
+        });
+        actions.push(b);
+      }
       if (["change", "too_small", "not_bazarr"].includes(f.status) && !f.ignored) {
         const b = el("button", { type: "button", text: f.status === "not_bazarr" ? "Remove" : "Apply" });
         b.addEventListener("click", () => act("/api/apply", { paths: [f.path] }, b));
@@ -592,19 +601,24 @@ async function showDashboard(selected) {
     librarySelect.replaceChildren(el("option", { value: "", text: "All libraries", selected: !library }),
       ...paths.map((p) => el("option", { value: p, text: p, selected: p === library })));
     currentCount = current.files;
-    applyAll.hidden = !["change", "not_bazarr"].includes(status) || !current.files;
+    applyAll.hidden = !["change", "not_bazarr", "no_audio"].includes(status) || !current.files;
     labelApplyAll();
     labelAccept();
     if (!openPanels.size) await loadFiles(false);
   }
 
   function labelApplyAll() {
-    const verb = status === "not_bazarr" ? "Remove" : "Apply";
+    const verb = status === "not_bazarr" ? "Remove" : status === "no_audio" ? "Replace" : "Apply";
     applyAll.textContent = library ? `${verb} all in ${library}` : `${verb} all ${currentCount}`;
   }
 
   applyAll.addEventListener("click", () => {
     const what = library ? `every file in ${library}` : `all ${currentCount} file(s)`;
+    if (status === "no_audio") {
+      if (!confirm(`Have Radarr or Sonarr delete ${what} with no audio and search for other copies?`)) return;
+      act("/api/replace", { library: library || null }, applyAll);
+      return;
+    }
     const question = status === "not_bazarr"
       ? `Remove the subtitle files Bazarr didn't download from ${what} now? They go to the recycle folder, so you can restore them from History.`
       : `Remove the unwanted tracks from ${what} now? Originals go to the recycle folder, so you can restore them from History.`;
@@ -633,6 +647,7 @@ async function showDashboard(selected) {
 const STATE_LABEL = {
   done: "Original kept", restored: "Restored", purged: "Original emptied from recycle folder",
   deleted: "Original deleted", failed: "Failed", swapping: "In progress", tagged: "Tagged in place",
+  replaced: "Deleted, searching for another copy",
 };
 
 async function showHistory() {
