@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS auto_tags (
 
 RESTORABLE = "done"
 TAGGED = "tagged"  # a language tag set in place: nothing to restore
+REPLACED = "replaced"  # deleted through Radarr or Sonarr, which search for another copy
 HOLD_DAYS = 7
 
 
@@ -225,6 +226,11 @@ class Store:
         """An entry for tags written in place, so automatic tagging shows in History."""
         return self._run("INSERT INTO history (path, message, state, changed_at) VALUES (?, ?, ?, ?)",
                          (path, message, TAGGED, time.time())).lastrowid
+
+    def add_replaced_history(self, path, original_size, message):
+        """An entry for a file Radarr or Sonarr deleted to replace. There's no original to restore."""
+        return self._run("INSERT INTO history (path, original_size, message, state, changed_at) VALUES (?, ?, ?, ?, ?)",
+                         (path, original_size, message, REPLACED, time.time())).lastrowid
 
     # Guesses and automatic tags
 

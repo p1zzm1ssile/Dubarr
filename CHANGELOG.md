@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.0
+
+- **Replace files with no audio.** Files under No audio on the Dashboard now have a Replace button, and the list has Replace all. Radarr or Sonarr deletes the file, blocklists the release it came from when their history shows it (so the same broken copy isn't downloaded again), and searches for another copy. For TV, only that episode is searched. Each one is listed in History. Files Radarr and Sonarr don't have, like extras, are left alone, and every file is read again first, so only one that really has no audio goes.
+- **Or by themselves.** Replace files with no audio by themselves, in Settings > General, does it every 10 minutes. Off by default, and Report only stops it too.
+
 ## 0.7.0
 
 - **Suggestions are waiting for you.** Dubarr now detects the language of untagged tracks in the background, at low priority, so the Untagged audio and Untagged subtitles lists already show each film's suggestion. Use suggestions confirms them in one click (#18).

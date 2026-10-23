@@ -1,4 +1,5 @@
-"""Radarr, Sonarr, Bazarr and Jellyfin: tell them to look at a file again after Dubarr changes it."""
+"""Radarr, Sonarr, Bazarr and Jellyfin: tell them to look at a file again after Dubarr changes it, and have
+Radarr or Sonarr replace a file that can't be fixed."""
 
 import posixpath
 import threading
@@ -118,6 +119,65 @@ class Arr:
         else:
             self._request("POST", "/command", json={"name": "RescanSeries", "seriesId": id})
         return title
+
+    def _file(self, local_path, item_id):
+        """Radarr's or Sonarr's record of the file itself, or None."""
+        remote = posixpath.normpath(to_remote(local_path, self.paths))
+        if self.kind == "radarr":
+            files = self._request("GET", "/moviefile", params={"movieId": item_id}) or []
+        else:
+            files = self._request("GET", "/episodefile", params={"seriesId": item_id}) or []
+        return next((f for f in files if posixpath.normpath(f.get("path") or "") == remote), None)
+
+    def _blocklist(self, item_id, episode_ids):
+        """Mark the download the file came from as failed, so the same release isn't picked again.
+        Returns whether its grab was found in the history."""
+        if self.kind == "radarr":
+            records = self._request("GET", "/history/movie", params={"movieId": item_id}) or []
+        else:
+            records = self._request("GET", "/history/series", params={"seriesId": item_id}) or []
+            records = [r for r in records if r.get("episodeId") in episode_ids]
+        imported = [r for r in records if r.get("eventType") == "downloadFolderImported" and r.get("downloadId")]
+        if not imported:
+            return False
+        latest = max(imported, key=lambda r: r.get("date") or "")
+        grabs = [r for r in records if r.get("eventType") == "grabbed" and r.get("downloadId") == latest["downloadId"]]
+        if not grabs:
+            return False
+        self._request("POST", f"/history/failed/{grabs[0]['id']}")
+        return True
+
+    def replace(self, local_path):
+        """Delete a file through Radarr or Sonarr and have them search for another copy, after blocklisting the
+        release it came from when that can be found. Returns (title, blocklisted), or None if it isn't theirs."""
+        found = self.find(local_path)
+        if not found:
+            return None
+        item_id, title = found
+        record = self._file(local_path, item_id)
+        if not record:
+            return None
+        if self.kind == "radarr":
+            episode_ids = []
+        else:
+            episodes = self._request("GET", "/episode", params={"seriesId": item_id}) or []
+            episode_ids = [e["id"] for e in episodes if e.get("episodeFileId") == record["id"]]
+            names = [f"S{e.get('seasonNumber', 0):02d}E{e.get('episodeNumber', 0):02d}" for e in episodes
+                     if e["id"] in episode_ids]
+            if names:
+                title = f"{title} {', '.join(names)}"
+        try:
+            blocklisted = self._blocklist(item_id, episode_ids)
+        except ServiceError:
+            blocklisted = False  # the history is a nice to have: the file still goes
+        if self.kind == "radarr":
+            self._request("DELETE", f"/moviefile/{record['id']}")
+            self._request("POST", "/command", json={"name": "MoviesSearch", "movieIds": [item_id]})
+        else:
+            self._request("DELETE", f"/episodefile/{record['id']}")
+            if episode_ids:
+                self._request("POST", "/command", json={"name": "EpisodeSearch", "episodeIds": episode_ids})
+        return title, blocklisted
 
 
 def original_language(item):
