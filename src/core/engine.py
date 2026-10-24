@@ -138,6 +138,7 @@ class Engine:
         self._stopped_at = 0.0  # when Stop was last pressed: automatic tagging queued before then is dropped
         self._cancelled = 0     # goes up with each Stop all: every job waiting its turn before then is dropped
         self._waiting = []      # the jobs waiting their turn, by name, for the web UI
+        self._auto_failed = set()  # (path, size, mtime) automatic tagging couldn't do: not tried again until it changes
         self.activity = None          # what's happening now, for the web UI
         self.last_scan = 0.0
         self.last_apply = 0.0
@@ -917,9 +918,16 @@ class Engine:
                     logger.warning(f"Background language detection: {e}. Trying again in 10 minutes")
                     return
                 minimum = config.auto_tag_confidence
-                sure = {i: g for i, g in found.items() if minimum and g["confidence"] * 100 >= minimum}
-                if sure:
-                    self._tag_guesses(row["path"], sure, started)
+                untagged = {t["index"] for t in row["info"].get("tracks", []) if t.get("language") == "und"}
+                sure = {i: g for i, g in found.items()
+                        if minimum and g["confidence"] * 100 >= minimum and int(i) in untagged}
+                if not sure or (row["path"], row["size"], row["mtime"]) in self._auto_failed:
+                    continue
+                if row["links"] > 1 and not config.process_hardlinked:
+                    continue  # still seeding: tagging would change the torrent's data, so it waits like any change
+                if self._tag_guesses(row["path"], sure, started) is None:
+                    # Failed: don't start a job for it every 10 minutes. It's tried again once the file changes
+                    self._auto_failed.add((row["path"], row["size"], row["mtime"]))
         finally:
             self._detecting.release()
 

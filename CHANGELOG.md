@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.2
+
+- **Automatic tagging no longer keeps starting.** With Tag automatically turned on, a file it couldn't tag, most often one still seeding, started a Tagging job again every 10 minutes. Seeding files now wait for seeding to stop, like any other change, and a file whose tagging fails isn't tried again until it changes.
+
 ## 0.8.1
 
 - **Stop means stop.** Pressing Stop during a job, such as replacing files with no audio, let automatic tagging that was waiting its turn start straight after, so it looked as if the job had restarted. Stop now also drops automatic tagging and Accept all waiting behind the job; background tagging picks up again at its next pass, 10 minutes later. Tags you saved yourself are still written.

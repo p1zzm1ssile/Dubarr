@@ -1,6 +1,7 @@
 """Language detection with Whisper, Ollama and the built-in detector, against fake servers."""
 
 import json
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -329,3 +330,38 @@ def test_stop_drops_automatic_tagging_queued_behind_a_job(library, engine, monke
     assert engine.store.file(left)["status"] == plans.UNKNOWN_AUDIO
     engine.tag(left, {i: g["language"] for i, g in guesses.items()})
     assert engine.store.file(left)["status"] != plans.UNKNOWN_AUDIO
+
+
+@needs_tools
+def test_auto_tag_doesnt_start_a_job_every_pass_for_a_file_it_cant_tag(library, engine, monkeypatch):
+    """A seeding file, or one whose tagging fails, used to start a Tagging job every 10 minutes."""
+    from core import plan as plans
+    seeding = make_video(str(library / "seeding.mkv"), audio=("eng", ""))
+    os.link(seeding, str(library.parent / "torrent-copy.mkv"))
+    broken = make_video(str(library / "broken.mkv"), audio=("eng", ""))
+    engine.scan()
+    monkeypatch.setattr(config, "auto_tag_confidence", 90)
+    jobs = []
+    real_job = engine.job
+
+    def counting_job(task, wait=False):
+        jobs.append(task)
+        return real_job(task, wait)
+
+    monkeypatch.setattr(engine, "job", counting_job)
+    from core import tagging
+
+    def fail(info, wanted):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(tagging, "tag_mkv", fail)
+    fake = whisper_says(monkeypatch, "it", 0.95)
+    try:
+        for _ in range(3):
+            engine.last_detect = 0
+            engine.detect_pass()
+    finally:
+        fake.close()
+    assert jobs == ["Tagging"]  # broken.mkv once; seeding.mkv waits for seeding to stop
+    assert engine.store.file(seeding)["status"] == plans.UNKNOWN_AUDIO
+    assert engine.store.file(broken)["status"] == plans.UNKNOWN_AUDIO
