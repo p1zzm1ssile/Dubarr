@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.3
+
+- **Why a file with no audio wasn't replaced.** Replace only works for files Radarr or Sonarr have as theirs. Files they don't, such as a leftover copy beside the film or a folder they don't know, were silently left on the No audio list. Each one now says why, e.g. "Radarr has Film, but not this file" or "Radarr and Sonarr don't have it. If they should, check the Folder mapping in Settings".
+- **Delete the ones that can't be replaced.** Those files get a Delete button, and the list gets Delete the N that can't be replaced. They go to the recycle folder, so they can be restored from History, and Radarr, Sonarr and Jellyfin are told.
+
 ## 0.8.2
 
 - **Automatic tagging no longer keeps starting.** With Tag automatically turned on, a file it couldn't tag, most often one still seeding, started a Tagging job again every 10 minutes. Seeding files now wait for seeding to stop, like any other change, and a file whose tagging fails isn't tried again until it changes.

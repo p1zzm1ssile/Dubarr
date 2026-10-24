@@ -147,6 +147,13 @@ class Arr:
         self._request("POST", f"/history/failed/{grabs[0]['id']}")
         return True
 
+    def why_not(self, local_path):
+        """Why replace() can't do a file, when the film or series is theirs but the file isn't. None otherwise."""
+        found = self.find(local_path)
+        if found and not self._file(local_path, found[0]):
+            return f"{self.name} has {found[1]}, but not this file, e.g. a leftover copy or an extra"
+        return None
+
     def replace(self, local_path):
         """Delete a file through Radarr or Sonarr and have them search for another copy, after blocklisting the
         release it came from when that can be found. Returns (title, blocklisted), or None if it isn't theirs."""

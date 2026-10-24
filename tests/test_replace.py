@@ -127,3 +127,22 @@ def test_by_itself_only_with_the_setting_on_and_report_only_off(arrs, library, t
     monkeypatch.setattr(config, "report_only", False)
     engine.tick()
     assert len(deletes()) == 1
+
+
+@needs_tools
+def test_says_why_a_file_wasnt_replaced_and_can_delete_it(arrs, library, tmp_path):
+    import os
+    leftover = make_video(str(library / "Film (2020)" / "Film.old.mkv"), audio=())  # Radarr's file is Film.mkv
+    stray = make_video(str(library / "Unknown" / "Clip.mkv"), audio=())
+    engine = Engine(Store(str(tmp_path / "db")))
+    engine.scan()
+    engine.replace_no_audio()
+    assert "Radarr has Film, but not this file" in engine.not_replaced(leftover)
+    assert "Radarr and Sonarr don't have it" in engine.not_replaced(stray)
+    assert set(engine.not_replaced_paths()) == {leftover, stray}
+
+    engine.delete_no_audio()
+    assert not os.path.exists(leftover) and not os.path.exists(stray)
+    assert engine.store.file(leftover) is None and not engine.not_replaced_paths()
+    _, entries = engine.store.history()
+    assert {e["state"] for e in entries} == {"done"}  # in the recycle folder, so they can be restored
