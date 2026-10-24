@@ -532,16 +532,30 @@ async function showDashboard(selected) {
       const fraction = a.bytes_total ? a.bytes_done / a.bytes_total : a.total ? a.done / a.total : null;
       const pct = fraction === null ? null : Math.min(100, Math.round(fraction * 100));
       const eta = a.eta_seconds !== null && a.eta_seconds !== undefined ? ` · about ${duration(a.eta_seconds)} left` : "";
-      const stop = el("button", { type: "button", class: "danger", text: "Stop" });
+      const stop = el("button", { type: "button", class: "danger", text: "Stop",
+        title: "Stop after the current file. Automatic tagging waiting its turn is dropped too" });
       stop.addEventListener("click", () => act("/api/stop", {}, stop));
+      // Jobs waiting their turn, like tags being saved or a scan after a settings change
+      const waiting = Object.entries(a.waiting || {});
+      const count = waiting.reduce((n, [, c]) => n + c, 0);
+      let stopAll = null;
+      if (count) {
+        stopAll = el("button", { type: "button", class: "danger", text: `Stop all (${count} waiting)`,
+          title: "Stop after the current file and cancel everything waiting: " + waiting.map(([t, c]) => `${t}${c > 1 ? ` ×${c}` : ""}`).join(", ") });
+        stopAll.addEventListener("click", () => {
+          if (!confirm(`Stop after the current file and cancel the ${count} job(s) waiting their turn? Tags you saved that haven't been written yet are cancelled too.`)) return;
+          act("/api/stop", { all: true }, stopAll);
+        });
+      }
       activity.replaceChildren(
         el("div", { class: "toolbar", style: "margin:0" },
           el("strong", { text: `${a.task}…` }),
           el("span", { class: "muted small", text: (a.total ? `${a.done.toLocaleString()} of ${a.total.toLocaleString()}` : a.detail === "Listing files" ? "listing files" : `${a.done} file(s) so far`)
             + (a.total && pct !== null ? ` (${pct}%)` : "") + (a.done ? eta : "") }),
-          el("span", { class: "spacer" }), stop),
+          el("span", { class: "spacer" }), stop, stopAll),
         pct !== null ? el("div", { class: "progress" }, el("span", { style: `width:${pct}%` })) : el("div", { class: "progress" }, el("span", { style: "width:100%;opacity:.35" })),
-        el("div", { class: "muted small mono", style: "word-break:break-all", text: a.detail || "" }));
+        el("div", { class: "muted small mono", style: "word-break:break-all", text: a.detail || "" }),
+        el("div", { class: "muted small", hidden: !count, text: "Waiting their turn: " + waiting.map(([t, c]) => `${t}${c > 1 ? ` ×${c}` : ""}`).join(", ") }));
       return;
     }
     const scan = el("button", { type: "button", text: "Scan now" });

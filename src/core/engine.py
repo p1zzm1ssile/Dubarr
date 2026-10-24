@@ -135,6 +135,9 @@ class Engine:
         self.store = store
         self._job = threading.Lock()
         self._stop = threading.Event()
+        self._stopped_at = 0.0  # when Stop was last pressed: automatic tagging queued before then is dropped
+        self._cancelled = 0     # goes up with each Stop all: every job waiting its turn before then is dropped
+        self._waiting = []      # the jobs waiting their turn, by name, for the web UI
         self.activity = None          # what's happening now, for the web UI
         self.last_scan = 0.0
         self.last_apply = 0.0
@@ -150,8 +153,19 @@ class Engine:
 
     @contextmanager
     def job(self, task, wait=False):
-        if not self._job.acquire(blocking=wait):
+        cancelled = self._cancelled
+        if wait:
+            self._waiting.append(task)
+        try:
+            got = self._job.acquire(blocking=wait)
+        finally:
+            if wait:
+                self._waiting.remove(task)
+        if not got:
             raise Busy(f"Dubarr is busy: {self.activity['task'] if self.activity else 'working'}")
+        if self._cancelled != cancelled:
+            self._job.release()
+            raise Busy(f"{task} was cancelled")
         self._stop.clear()
         # done/total count files; bytes_done/bytes_total, when set, give a better time estimate for changes
         self.activity = {"task": task, "detail": "", "done": 0, "total": 0, "bytes_done": 0, "bytes_total": 0,
@@ -177,12 +191,31 @@ class Engine:
             eta = elapsed / a["bytes_done"] * (a["bytes_total"] - a["bytes_done"])
         elif a["total"] and a["done"]:
             eta = elapsed / a["done"] * (a["total"] - a["done"])
+        a["waiting"] = self.waiting()
         a["elapsed_seconds"] = round(elapsed)
         a["eta_seconds"] = round(eta) if eta is not None else None
         return a
 
     def stop(self):
+        """Stop the job after the current file, and drop automatic tagging waiting behind it, so it doesn't
+        start up as soon as the job ends. Tags you saved yourself are still written."""
+        self._stopped_at = time.time()
         self._stop.set()
+
+    def stop_all(self):
+        """Stop the job after the current file and cancel every job waiting its turn, tags you saved included."""
+        self._cancelled += 1
+        self.stop()
+
+    def waiting(self):
+        """How many of each job are waiting their turn, e.g. {"Tagging": 3}."""
+        counts = {}
+        for task in list(self._waiting):
+            counts[task] = counts.get(task, 0) + 1
+        return counts
+
+    def stopped_since(self, started):
+        return self._stopped_at >= started
 
     def background(self, target, *args, wait=False, **kwargs):
         """Run a job in its own thread. Raises Busy straight away, unless wait is set."""
@@ -780,13 +813,16 @@ class Engine:
                 wanted[index] = code
         return wanted
 
-    def tag(self, path, changes, wait=False, guesses=None):
+    def tag(self, path, changes, wait=False, guesses=None, since=None):
         """Set the language of tracks, e.g. {2: "eng", 4: "fra"}. Returns what was done.
 
         guesses ({index: guess}) says the tags come from detection rather than from you. Unless every one is at
         least trust_confidence sure, the file then waits under Tagged automatically before tracks are removed.
-        Tags you set yourself mean you've looked at the file, so any such wait ends."""
+        Tags you set yourself mean you've looked at the file, so any such wait ends.
+        since is when the automatic tagging asking for this began: if Stop was pressed after that, it's dropped."""
         with self.job("Tagging", wait=wait):
+            if guesses and since is not None and self.stopped_since(since):
+                return "Stopped"
             self.activity["detail"] = path
             library = self.library_for(path)
             if not library:
@@ -865,12 +901,14 @@ class Engine:
         if not self._detecting.acquire(blocking=False):
             return
         try:
-            self.last_detect = time.time()
+            started = self.last_detect = time.time()
             if not config.detect_in_background:
                 return
             _, rows = self.store.files(statuses=[plans.UNKNOWN_AUDIO, plans.UNKNOWN_SUBTITLES], ignored=False,
                                        limit=1_000_000)
             for row in rows:
+                if self.stopped_since(started):
+                    return  # the next pass carries on, in 10 minutes
                 if not config.detect_in_background or not row["info"]:
                     continue
                 try:
@@ -881,13 +919,14 @@ class Engine:
                 minimum = config.auto_tag_confidence
                 sure = {i: g for i, g in found.items() if minimum and g["confidence"] * 100 >= minimum}
                 if sure:
-                    self._tag_guesses(row["path"], sure)
+                    self._tag_guesses(row["path"], sure, started)
         finally:
             self._detecting.release()
 
-    def _tag_guesses(self, path, guesses):
+    def _tag_guesses(self, path, guesses, since):
         try:
-            return self.tag(path, {i: g["language"] for i, g in guesses.items()}, wait=True, guesses=guesses)
+            return self.tag(path, {i: g["language"] for i, g in guesses.items()}, wait=True, guesses=guesses,
+                            since=since)
         except (tagging.TagError, OSError) as e:
             logger.warning(f"Couldn't tag {path} from its suggestions: {e}")
             return None
@@ -896,12 +935,16 @@ class Engine:
         """Tag every untagged track whose suggestion is at least minimum percent sure (Accept all)."""
         _, rows = self.store.files(statuses=[plans.UNKNOWN_AUDIO, plans.UNKNOWN_SUBTITLES], ignored=False,
                                    limit=1_000_000, library=library)
+        started = time.time()
         tagged = 0
         for row in rows:
+            if self.stopped_since(started):
+                break
             sure = {i: g for i, g in self.guesses(row).items() if g["confidence"] * 100 >= minimum}
-            if sure and self._tag_guesses(row["path"], sure) not in (None, "Nothing to change"):
+            if sure and self._tag_guesses(row["path"], sure, started) not in (None, "Nothing to change", "Stopped"):
                 tagged += 1
-        logger.log("ACTION", f"Accept all: tagged {tagged} file(s) from suggestions at least {minimum}% sure")
+        stopped = " before Stop was pressed" if self.stopped_since(started) else ""
+        logger.log("ACTION", f"Accept all: tagged {tagged} file(s) from suggestions at least {minimum}% sure{stopped}")
 
     def purge(self):
         count = swap.purge(self.store, config.recycle_days)

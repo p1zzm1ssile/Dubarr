@@ -348,6 +348,13 @@ class Handler(BaseHTTPRequestHandler):
                     engine.background(engine.remove_by_hand, file, tracks, files)
                     return self.send(200, {"ok": True, "message": "Removing them. It shows under History when it's done"})
                 if path == "/api/stop":
+                    if data.get("all"):
+                        waiting = sum(engine.waiting().values())
+                        engine.stop_all()
+                        logger.info(f"Stop all pressed: stopping after the current file and cancelling {waiting} "
+                                    "waiting job(s)")
+                        return self.send(200, {"ok": True, "message": f"Stopping after the current file. "
+                                               f"Cancelled {waiting} waiting job(s)"})
                     engine.stop()
                     return self.send(200, {"ok": True, "message": "Stopping after the current file"})
                 if path == "/api/recheck":

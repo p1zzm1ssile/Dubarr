@@ -2,6 +2,7 @@
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
@@ -289,3 +290,42 @@ def test_accept_all_and_tagging_by_hand(library, engine, monkeypatch):
     # Tagging by hand means you've looked at it
     engine.tag(high, {"2": "fra"})
     assert engine.store.file(high)["status"] == plans.CHANGE
+
+
+@needs_tools
+def test_stop_drops_automatic_tagging_queued_behind_a_job(library, engine, monkeypatch):
+    """Stop during a job used to let automatic tagging waiting for its turn start straight after."""
+    from core import plan as plans
+    first = make_video(str(library / "first.mkv"), audio=("eng", ""))
+    second = make_video(str(library / "second.mkv"), audio=("eng", ""))
+    engine.scan()
+    fake = whisper_says(monkeypatch, "it", 0.92)
+    try:
+        for path in (first, second):
+            engine.guess_file(engine.store.file(path))
+    finally:
+        fake.close()
+
+    # Accept all stops at the next file
+    real_tag = engine.tag
+
+    def tag_then_stop(*args, **kwargs):
+        result = real_tag(*args, **kwargs)
+        engine.stop()
+        return result
+
+    monkeypatch.setattr(engine, "tag", tag_then_stop)
+    engine.accept_guesses(90)
+    statuses = sorted(engine.store.file(p)["status"] for p in (first, second))
+    assert statuses.count(plans.UNKNOWN_AUDIO) == 1
+    monkeypatch.setattr(engine, "tag", real_tag)
+
+    # Tagging that was waiting while Stop was pressed is dropped; tags you save yourself still go
+    left = next(p for p in (first, second) if engine.store.file(p)["status"] == plans.UNKNOWN_AUDIO)
+    asked = time.time() - 1
+    engine.stop()
+    guesses = engine.guesses(engine.store.file(left))
+    assert engine._tag_guesses(left, guesses, asked) == "Stopped"
+    assert engine.store.file(left)["status"] == plans.UNKNOWN_AUDIO
+    engine.tag(left, {i: g["language"] for i, g in guesses.items()})
+    assert engine.store.file(left)["status"] != plans.UNKNOWN_AUDIO
