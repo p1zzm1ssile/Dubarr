@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.5
+
+- **Automatic tagging gives way to you.** It only runs while Dubarr is idle, shows as "Tagging automatically", and never queues up behind a job you started. Starting a job while it's tagging no longer says Dubarr is busy: your job goes next, and automatic tagging waits for its next pass.
+- **Hours for automatic tagging.** Settings > Language detection has Only tag automatically from / Until (hour), e.g. 1 to 7 for overnight. Suggestions are still made at any time. Tag automatically stays off unless you set a level.
+- **Tagging no longer waits on Bazarr, Radarr, Sonarr or Jellyfin.** Telling them about a change now happens alongside, so the next file starts straight away. Each tag was taking 30 seconds while Bazarr didn't answer.
+- **Bazarr being slow isn't an error.** Bazarr only answers a rescan once it's finished, which for a big series can take minutes, so "Couldn't tell Bazarr about the change: Bazarr didn't answer in time" filled the log. Not hearing back is now fine. If Bazarr can't be reached at all, it's said once and Bazarr isn't asked again for 10 minutes; the same goes for Radarr, Sonarr and Jellyfin.
+
 ## 0.8.4
 
 - **MP4s are tagged in a moment.** Setting a track's language on an MP4 used to copy the whole file, a minute or more for a big film, while MKVs took a second. MP4s are now tagged in place too: only the two bytes holding each track's language change, and the file is read back to check. The few laid out in a way that can't be done safely are still copied as before.

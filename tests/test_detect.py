@@ -344,9 +344,9 @@ def test_auto_tag_doesnt_start_a_job_every_pass_for_a_file_it_cant_tag(library, 
     jobs = []
     real_job = engine.job
 
-    def counting_job(task, wait=False):
+    def counting_job(task, wait=False, automatic=False):
         jobs.append(task)
-        return real_job(task, wait)
+        return real_job(task, wait, automatic)
 
     monkeypatch.setattr(engine, "job", counting_job)
     from core import tagging
@@ -362,7 +362,7 @@ def test_auto_tag_doesnt_start_a_job_every_pass_for_a_file_it_cant_tag(library, 
             engine.detect_pass()
     finally:
         fake.close()
-    assert jobs == ["Tagging"]  # broken.mkv once; seeding.mkv waits for seeding to stop
+    assert jobs == ["Tagging automatically"]  # broken.mkv once; seeding.mkv waits for seeding to stop
     assert engine.store.file(seeding)["status"] == plans.UNKNOWN_AUDIO
     assert engine.store.file(broken)["status"] == plans.UNKNOWN_AUDIO
 
@@ -379,3 +379,51 @@ def test_says_what_accept_all_would_do(library, engine, monkeypatch):
         fake.close()
     assert engine.acceptable(90) == (0, 87, 1)
     assert engine.acceptable(80) == (1, None, 1)
+
+
+@needs_tools
+def test_auto_tag_only_when_idle_and_in_its_hours(library, engine, monkeypatch):
+    from core import plan as plans
+    film = make_video(str(library / "film.mkv"), audio=("eng", ""))
+    engine.scan()
+    monkeypatch.setattr(config, "auto_tag_confidence", 90)
+    fake = whisper_says(monkeypatch, "it", 0.95)
+    try:
+        # Outside its hours
+        hour = __import__("datetime").datetime.now().hour
+        monkeypatch.setattr(config, "auto_tag_from", (hour + 1) % 24)
+        monkeypatch.setattr(config, "auto_tag_until", (hour + 2) % 24)
+        engine.detect_pass()
+        assert engine.store.file(film)["status"] == plans.UNKNOWN_AUDIO
+        monkeypatch.setattr(config, "auto_tag_until", (hour + 1) % 24)  # any time
+        # While a job you started runs
+        with engine.job("Replacing files with no audio"):
+            engine.detect_pass()
+        assert engine.store.file(film)["status"] == plans.UNKNOWN_AUDIO
+        engine.detect_pass()
+    finally:
+        fake.close()
+    assert engine.store.file(film)["status"] != plans.UNKNOWN_AUDIO
+
+
+def test_your_job_isnt_turned_away_by_automatic_tagging(engine):
+    ran = threading.Event()
+    release = threading.Event()
+
+    def automatic():
+        with engine.job("Tagging automatically", automatic=True):
+            release.wait()
+
+    t = threading.Thread(target=automatic)
+    t.start()
+    while not engine.busy():
+        time.sleep(0.01)
+
+    def scan(trigger, wait=False):
+        with engine.job("Scanning", wait=wait):
+            ran.set()
+
+    engine.background(scan, "manual")  # no Busy: it waits for the one file being tagged
+    release.set()
+    t.join(5)
+    assert ran.wait(5)
