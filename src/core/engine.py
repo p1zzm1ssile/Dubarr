@@ -31,6 +31,9 @@ AUTO_TAGGED = "auto_tagged"  # tagged from a guess: tracks wait until you've che
 
 APPLY_EVERY_SECONDS = 600
 DETECT_EVERY_SECONDS = 600
+DETECT_PAUSE_SECONDS = 5     # between files in background detection, so Whisper and the disks get a rest
+NOTIFY_QUIET_SECONDS = 60    # the other apps are told once changes have stopped for this long
+NOTIFY_MOST_SECONDS = 300    # or after this, while changes keep coming
 
 
 class Busy(Exception):
@@ -152,6 +155,8 @@ class Engine:
         self._notices = []      # files to tell Radarr, Sonarr, Bazarr and Jellyfin about, outside the job
         self._notices_ready = threading.Condition()
         self._notifier = None
+        self.notify_quiet = NOTIFY_QUIET_SECONDS
+        self.detect_pause = DETECT_PAUSE_SECONDS
         self._services = {}
         self._unreachable = {}  # Radarr, Sonarr or Jellyfin: when to try asking them again
 
@@ -1003,22 +1008,28 @@ class Engine:
 
     def detect_pass(self):
         """Work through the untagged lists in the background, keeping a suggestion for each track, and tag the
-        ones sure enough if that's turned on. Only reads files, so jobs carry on beside it; tagging waits its turn."""
+        ones sure enough if that's turned on. Only while Dubarr is idle and within the hours set for background
+        work, with a pause between files: it stops as soon as a job starts and carries on at the next pass."""
         if not self._detecting.acquire(blocking=False):
             return
         try:
             started = self.last_detect = time.time()
-            if not config.detect_in_background:
+            if not config.detect_in_background or not in_window(config.auto_tag_from, config.auto_tag_until):
                 return
             _, rows = self.store.files(statuses=[plans.UNKNOWN_AUDIO, plans.UNKNOWN_SUBTITLES], ignored=False,
                                        limit=1_000_000)
             for row in rows:
-                if self.stopped_since(started):
+                if self.stopped_since(started) or self.busy() or self._yield:
                     return  # the next pass carries on, in 10 minutes
                 if not config.detect_in_background or not row["info"]:
                     continue
+                if not in_window(config.auto_tag_from, config.auto_tag_until):
+                    return
                 try:
+                    asked = len(self.store.guesses(row["path"], row["size"], row["mtime"]))
                     found = self.guess_file(row)
+                    if self.detect_pause and len(self.store.guesses(row["path"], row["size"], row["mtime"])) > asked:
+                        self._stop.wait(self.detect_pause)  # Whisper was asked: give it and the disks a rest
                 except detect.ServiceError as e:
                     logger.warning(f"Background language detection: {e}. Trying again in 10 minutes")
                     return
@@ -1031,8 +1042,7 @@ class Engine:
                 if row["links"] > 1 and not config.process_hardlinked:
                     continue  # still seeding: tagging would change the torrent's data, so it waits like any change
                 # Only while Dubarr is idle: automatic tagging never queues up behind, or in front of, your jobs
-                if (self.busy() or self._yield or self.stopped_since(started)
-                        or not in_window(config.auto_tag_from, config.auto_tag_until)):
+                if self.busy() or self._yield or self.stopped_since(started):
                     continue
                 if self._tag_guesses(row["path"], sure, started, automatic=True) is None:
                     # Failed: don't start a job for it every 10 minutes. It's tried again once the file changes
@@ -1118,22 +1128,35 @@ class Engine:
             self._notices_ready.notify_all()
 
     def _send_notices(self):
+        """Tell the apps in batches: wait until changes stop coming for a minute (or 5 minutes at most), then ask
+        each film or series to be rescanned once, however many of its files changed. A rescan reads every file of
+        a series, so one per episode tagged could swamp Sonarr and Bazarr."""
         while True:
             with self._notices_ready:
+                first = time.time()
+                while self._notices:
+                    count = len(self._notices)
+                    self._notices_ready.wait(self.notify_quiet)
+                    if len(self._notices) == count or time.time() - first >= NOTIFY_MOST_SECONDS:
+                        break
                 if not self._notices:
                     self._notifier = None
                     self._notices_ready.notify_all()
                     return
-                path = self._notices[0]
-            try:
-                self.notify_now(path)
-            except Exception as e:
-                logger.warning(f"Couldn't tell the other apps about {path}: {e}")
+                batch = list(self._notices)
+            done = set()
+            for path in batch:
+                try:
+                    self.notify_now(path, done)
+                except Exception as e:
+                    logger.warning(f"Couldn't tell the other apps about {path}: {e}")
             with self._notices_ready:
-                self._notices.remove(path)
+                for path in batch:
+                    self._notices.remove(path)
+                self._notices_ready.notify_all()
 
     def wait_for_notices(self, timeout=30):
-        """Until every app has been told about the changes so far (for tests and shutdown)."""
+        """Until every app has been told about the changes so far (for tests)."""
         with self._notices_ready:
             self._notices_ready.wait_for(lambda: not self._notices, timeout)
 
@@ -1144,7 +1167,10 @@ class Engine:
             self._unreachable[kind] = time.time() + 600
         return new
 
-    def notify_now(self, path):
+    def notify_now(self, path, done=None):
+        """Tell the apps about one changed file. done holds what's been asked already in this batch, so each film
+        or series is only rescanned once."""
+        done = set() if done is None else done
         found = {}
         for kind in ("radarr", "sonarr"):
             arr = self._service(kind)
@@ -1154,12 +1180,15 @@ class Engine:
                 hit = arr.find(path)
                 if hit:
                     found[kind] = hit[0]
+                    if (kind, hit[0]) in done:
+                        continue
+                    done.add((kind, hit[0]))
                     arr.rescan(path)
                     logger.info(f"Asked {arr.name} to rescan {hit[1]}")
             except ServiceError as e:
                 if self._down(kind, e):
                     logger.warning(f"Couldn't ask {arr.name} to rescan: {e}")
-        self._tell_bazarr(path, found)
+        self._tell_bazarr(path, found, done)
         jellyfin = self._service("jellyfin")
         if jellyfin and time.time() >= self._unreachable.get("jellyfin", 0):
             try:
@@ -1168,7 +1197,7 @@ class Engine:
                 if self._down("jellyfin", e):
                     logger.warning(f"Couldn't tell Jellyfin about the change: {e}")
 
-    def _tell_bazarr(self, path, found):
+    def _tell_bazarr(self, path, found, done=None):
         """Ask Bazarr to look at the film again and, if it's been left without subtitles in your languages,
         to search for some."""
         bazarr = self._service("bazarr")
@@ -1185,8 +1214,13 @@ class Engine:
                     logger.info(f"Bazarr doesn't know {path}, so it wasn't told about the change")
                     return
                 kind, item_id = located
-            bazarr.action(kind, item_id, "scan-disk")
-            if config.bazarr_search_missing and not self.has_wanted_subtitles(path):
+            done = set() if done is None else done
+            if ("bazarr", kind, item_id) not in done:
+                done.add(("bazarr", kind, item_id))
+                bazarr.action(kind, item_id, "scan-disk")
+            if (config.bazarr_search_missing and ("bazarr-search", kind, item_id) not in done
+                    and not self.has_wanted_subtitles(path)):
+                done.add(("bazarr-search", kind, item_id))
                 bazarr.action(kind, item_id, "search-missing")
                 logger.info(f"Asked Bazarr to look for subtitles for {os.path.basename(path)}")
         except ServiceError as e:

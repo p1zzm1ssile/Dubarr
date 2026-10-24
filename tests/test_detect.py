@@ -427,3 +427,18 @@ def test_your_job_isnt_turned_away_by_automatic_tagging(engine):
     release.set()
     t.join(5)
     assert ran.wait(5)
+
+
+@needs_tools
+def test_background_detection_waits_while_a_job_runs(library, engine, monkeypatch):
+    film = make_video(str(library / "film.mkv"), audio=("eng", ""))
+    engine.scan()
+    fake = whisper_says(monkeypatch, "it", 0.95)
+    try:
+        with engine.job("Changing files"):
+            engine.detect_pass()
+        assert not fake.requests  # Whisper isn't asked while Dubarr is busy
+        engine.detect_pass()
+    finally:
+        fake.close()
+    assert len(fake.requests) == 1

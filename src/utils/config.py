@@ -308,10 +308,11 @@ FIELDS = [
       env_int("AUTO_TAG_CONFIDENCE", default=0), section="In the background", min=0, max=100,
       help="0 is off: suggestions wait for you. 90 is a good start. Every automatic tag is listed in History. "
            "Guesses below this stay as suggestions, and Accept all on the Dashboard tags those above a level you pick."),
-    F("auto_tag_from", "detection", "Only tag automatically from (hour)", "int",
+    F("auto_tag_from", "detection", "Only work in the background from (hour)", "int",
       env_int("AUTO_TAG_FROM", default=0), section="In the background", min=0, max=23,
-      help="Automatic tagging only runs between these hours, e.g. 1 to 7 for overnight, and only while Dubarr "
-           "isn't doing anything else. The same hour in both means any time. Suggestions are still made at any time."),
+      help="Detecting and tagging in the background only happen between these hours, e.g. 1 to 7 for overnight, "
+           "and only while Dubarr isn't doing anything else. Whisper is heavy on a CPU, so this keeps it out of "
+           "the way. The same hour in both means any time."),
     F("auto_tag_until", "detection", "Until (hour)", "int",
       env_int("AUTO_TAG_UNTIL", default=0), section="In the background", min=0, max=23),
     F("trust_confidence", "detection", "Change files straight away when at least this sure (%)", "int",

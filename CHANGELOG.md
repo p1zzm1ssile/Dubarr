@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.6
+
+- **Much lighter on the server.** Every tagged or changed file used to ask Sonarr (or Radarr) to rescan its whole series, and Bazarr to rescan it too, so tagging 50 episodes of a show meant 50 full rescans of that show at once. Changes are now gathered up and each film or series is rescanned once, a minute after the changes stop.
+- **Background detection keeps out of the way.** It only runs while Dubarr isn't doing anything else, stopping as soon as a job starts, rests a few seconds after each file it sends to Whisper, and keeps to the hours set in Settings > Language detection (now Only work in the background from / Until, covering detection as well as automatic tagging).
+
 ## 0.8.5
 
 - **Replace works when Radarr or Sonarr has the film as missing.** A file with no audio that Radarr or Sonarr never imported (it shows as Missing there, with no file) couldn't be replaced, as they had no file to delete. Dubarr now deletes it itself, into the recycle folder so it can be restored from History, and asks them to search for the film or episode. A leftover copy beside a film they do have is still left for you to Delete.
