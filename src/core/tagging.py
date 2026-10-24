@@ -1,13 +1,16 @@
 """Listen to a track, read a few subtitle lines, and set a track's language tag.
 
 MKV files are tagged in place with mkvpropedit: only the header changes, it
-takes a moment and nothing is copied. MP4 files have no in-place editor, so
-they get a quick copy with the new tag, checked and swapped like any change.
+takes a moment and nothing is copied. MP4 files are tagged in place too, by
+rewriting the two bytes that hold each track's language. When an MP4 is laid
+out in a way that can't be done safely, it gets a copy with the new tag
+instead, checked and swapped like any change.
 """
 
 import json
 import os
 import re
+import struct
 import subprocess
 
 from core.probe import MediaInfo, ProbeError, probe
@@ -117,6 +120,116 @@ def tag_mkv(info: MediaInfo, changes: dict):
     result = _run(command, timeout=300)
     if result.returncode >= 2:
         raise TagError((result.stdout or result.stderr or "mkvpropedit failed").strip().splitlines()[-1])
+
+
+# MP4 boxes holding a track's language: moov > trak > mdia > mdhd, with hdlr saying what kind of track it is
+AUDIO_HANDLERS = {b"soun"}
+SUBTITLE_HANDLERS = {b"sbtl", b"subt", b"text", b"clcp"}
+
+
+def _boxes(f, start, end):
+    """(type, start, header length, end) of each box between start and end."""
+    pos = start
+    while pos + 8 <= end:
+        f.seek(pos)
+        size, kind = struct.unpack(">I4s", f.read(8))
+        header = 8
+        if size == 1:
+            size = struct.unpack(">Q", f.read(8))[0]
+            header = 16
+        elif size == 0:
+            size = end - pos
+        if size < header or pos + size > end:
+            raise TagError("The MP4's layout couldn't be read")
+        yield kind, pos, header, pos + size
+        pos += size
+
+
+def _child(f, parent, kind):
+    _, start, header, end = parent
+    return next((b for b in _boxes(f, start + header, end) if b[0] == kind), None)
+
+
+def _language_fields(f, size):
+    """Where each audio and subtitle track's language is stored, in track order, as (offset, kind).
+    None if the file isn't laid out in a way this can handle."""
+    moov = next((b for b in _boxes(f, 0, size) if b[0] == b"moov"), None)
+    if not moov:
+        return None
+    fields = []
+    for trak in (b for b in _boxes(f, moov[1] + moov[2], moov[3]) if b[0] == b"trak"):
+        mdia = _child(f, trak, b"mdia")
+        if not mdia:
+            return None
+        hdlr, mdhd = _child(f, mdia, b"hdlr"), _child(f, mdia, b"mdhd")
+        if not hdlr or not mdhd or _child(f, mdia, b"elng"):
+            return None  # an extended language tag would be read instead of the one changed here
+        f.seek(hdlr[1] + hdlr[2] + 8)
+        handler = f.read(4)
+        kind = "audio" if handler in AUDIO_HANDLERS else "subtitle" if handler in SUBTITLE_HANDLERS else None
+        if not kind:
+            continue
+        f.seek(mdhd[1] + mdhd[2])
+        version = f.read(1)[0]
+        offset = mdhd[1] + mdhd[2] + (32 if version == 1 else 20)
+        if offset + 2 > mdhd[3]:
+            return None
+        fields.append((offset, kind))
+    return fields
+
+
+def _packed(code: str) -> bytes:
+    code = bibliographic(code)
+    if len(code) != 3 or not code.isalpha() or not code.islower():
+        raise ValueError(code)
+    value = 0
+    for c in code:
+        value = (value << 5) | (ord(c) - 0x60)
+    return struct.pack(">H", value)
+
+
+def tag_mp4(info: MediaInfo, changes: dict) -> bool:
+    """Set the language of MP4 tracks in place, in a moment. Returns False, having changed nothing, when the
+    file can't be done that way and needs retag_mp4's copy instead."""
+    tracks = [t for t in info.tracks if t.type in ("audio", "subtitle")]
+    try:
+        values = {index: _packed(code) for index, code in changes.items()}
+    except ValueError:
+        return False
+    with open(info.path, "r+b") as f:
+        try:
+            fields = _language_fields(f, os.fstat(f.fileno()).st_size)
+        except (TagError, struct.error, IndexError):
+            return False
+        # Matched up in order, so it only goes ahead when the tracks line up exactly with what ffprobe saw
+        if fields is None or [kind for _, kind in fields] != [t.type for t in tracks]:
+            return False
+        offsets = {t.index: offset for t, (offset, _) in zip(tracks, fields)}
+        old = {}
+        for index in values:
+            f.seek(offsets[index])
+            old[index] = f.read(2)
+            if struct.unpack(">H", old[index])[0] < 0x400:
+                return False  # an old QuickTime language number, not a code
+        for index, value in values.items():
+            f.seek(offsets[index])
+            f.write(value)
+        f.flush()
+        os.fsync(f.fileno())
+        try:
+            new = probe(info.path)
+            got = {t.index: t.language for t in new.tracks}
+            ok = all(got.get(t.index) == changes.get(t.index, t.language) for t in tracks)
+        except ProbeError:
+            ok = False
+        if not ok:
+            for index, value in old.items():
+                f.seek(offsets[index])
+                f.write(value)
+            f.flush()
+            os.fsync(f.fileno())
+            return False
+    return True
 
 
 def retag_mp4(info: MediaInfo, changes: dict) -> MediaInfo:

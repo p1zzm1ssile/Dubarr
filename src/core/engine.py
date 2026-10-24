@@ -916,6 +916,9 @@ class Engine:
                     tagging.tag_mkv(info, wanted)
                     if guesses:
                         self.store.add_tag_history(path, message)
+                elif tagging.tag_mp4(info, wanted):
+                    if guesses:
+                        self.store.add_tag_history(path, message)
                 else:
                     new = tagging.retag_mp4(info, wanted)
                     swap.swap(self.store, None, path, info.size, new.size, message, [],

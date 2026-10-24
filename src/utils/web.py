@@ -378,10 +378,10 @@ class Handler(BaseHTTPRequestHandler):
                     # Checked now, so a mistake shows straight away; written in turn, so you can go on to the next film
                     if not engine.tags_wanted(file, tags):
                         return self.send(200, {"ok": True, "message": "Nothing to change"})
+                    busy = engine.busy()
                     engine.background(engine.tag, file, tags, wait=True)
-                    mp4 = not file.lower().endswith((".mkv", ".mk3d"))
-                    return self.send(200, {"ok": True, "message": "Saving. MP4 files are copied with the new tags, one "
-                                           "at a time, and show under History when done" if mp4 else "Saved"})
+                    return self.send(200, {"ok": True, "message": "Saving once the current job is done" if busy
+                                           else "Saved"})
                 if path == "/api/accept":
                     try:
                         minimum = int(data.get("minimum", 0))
