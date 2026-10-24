@@ -136,6 +136,8 @@ class Engine:
         self._job = threading.Lock()
         self._stop = threading.Event()
         self._stopped_at = 0.0  # when Stop was last pressed: automatic tagging queued before then is dropped
+        self._cancelled = 0     # goes up with each Stop all: every job waiting its turn before then is dropped
+        self._waiting = []      # the jobs waiting their turn, by name, for the web UI
         self.activity = None          # what's happening now, for the web UI
         self.last_scan = 0.0
         self.last_apply = 0.0
@@ -151,8 +153,19 @@ class Engine:
 
     @contextmanager
     def job(self, task, wait=False):
-        if not self._job.acquire(blocking=wait):
+        cancelled = self._cancelled
+        if wait:
+            self._waiting.append(task)
+        try:
+            got = self._job.acquire(blocking=wait)
+        finally:
+            if wait:
+                self._waiting.remove(task)
+        if not got:
             raise Busy(f"Dubarr is busy: {self.activity['task'] if self.activity else 'working'}")
+        if self._cancelled != cancelled:
+            self._job.release()
+            raise Busy(f"{task} was cancelled")
         self._stop.clear()
         # done/total count files; bytes_done/bytes_total, when set, give a better time estimate for changes
         self.activity = {"task": task, "detail": "", "done": 0, "total": 0, "bytes_done": 0, "bytes_total": 0,
@@ -178,6 +191,7 @@ class Engine:
             eta = elapsed / a["bytes_done"] * (a["bytes_total"] - a["bytes_done"])
         elif a["total"] and a["done"]:
             eta = elapsed / a["done"] * (a["total"] - a["done"])
+        a["waiting"] = self.waiting()
         a["elapsed_seconds"] = round(elapsed)
         a["eta_seconds"] = round(eta) if eta is not None else None
         return a
@@ -187,6 +201,18 @@ class Engine:
         start up as soon as the job ends. Tags you saved yourself are still written."""
         self._stopped_at = time.time()
         self._stop.set()
+
+    def stop_all(self):
+        """Stop the job after the current file and cancel every job waiting its turn, tags you saved included."""
+        self._cancelled += 1
+        self.stop()
+
+    def waiting(self):
+        """How many of each job are waiting their turn, e.g. {"Tagging": 3}."""
+        counts = {}
+        for task in list(self._waiting):
+            counts[task] = counts.get(task, 0) + 1
+        return counts
 
     def stopped_since(self, started):
         return self._stopped_at >= started

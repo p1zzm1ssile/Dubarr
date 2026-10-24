@@ -3,6 +3,7 @@
 ## 0.8.1
 
 - **Stop means stop.** Pressing Stop during a job, such as replacing files with no audio, let automatic tagging that was waiting its turn start straight after, so it looked as if the job had restarted. Stop now also drops automatic tagging and Accept all waiting behind the job; background tagging picks up again at its next pass, 10 minutes later. Tags you saved yourself are still written.
+- **Stop all.** While jobs are waiting their turn behind the one running (tags being saved, a scan after a settings change, automatic tagging), the Dashboard shows what is waiting and a Stop all button. It stops after the current file and cancels everything waiting, tags you saved that haven't been written yet included.
 
 ## 0.8.0
 
