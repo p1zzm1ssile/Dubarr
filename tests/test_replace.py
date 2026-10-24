@@ -146,3 +146,29 @@ def test_says_why_a_file_wasnt_replaced_and_can_delete_it(arrs, library, tmp_pat
     assert engine.store.file(leftover) is None and not engine.not_replaced_paths()
     _, entries = engine.store.history()
     assert {e["state"] for e in entries} == {"done"}  # in the recycle folder, so they can be restored
+
+
+@needs_tools
+def test_a_file_they_have_as_missing_is_deleted_and_searched_for(arrs, library, tmp_path):
+    import os
+    calls, answers = arrs
+    answers[("radarr", "GET", "/moviefile")] = []  # Radarr shows Film as missing
+    answers[("sonarr", "GET", "/episodefile")] = []
+    answers[("sonarr", "GET", "/episode")] = [
+        {"id": 700, "episodeFileId": 0, "seasonNumber": 1, "episodeNumber": 1},
+        {"id": 701, "episodeFileId": 0, "seasonNumber": 1, "episodeNumber": 2},
+        {"id": 702, "episodeFileId": 0, "seasonNumber": 1, "episodeNumber": 3}]
+    film = make_video(str(library / "Film (2020)" / "Film.mkv"), audio=())
+    episode = make_video(str(tmp_path / "tv" / "Show" / "Season 01" / "Show - S01E02E03 - Two.mkv"), audio=())
+    import utils.config as config
+    config.library_list = config.library_list + [{"path": str(tmp_path / "tv"), "audio": ["eng"], "subtitles": ["eng"]}]
+    engine = Engine(Store(str(tmp_path / "db")))
+    engine.scan()
+    engine.replace_no_audio()
+    assert not os.path.exists(film) and not os.path.exists(episode)
+    assert ("POST", "/command", {"name": "MoviesSearch", "movieIds": [5]}) in writes(calls, "radarr")
+    assert ("POST", "/command", {"name": "EpisodeSearch", "episodeIds": [701, 702]}) in writes(calls, "sonarr")
+    assert not [c for c in writes(calls, "radarr") + writes(calls, "sonarr") if c[0] == "DELETE"]
+    _, entries = engine.store.history()
+    assert {e["state"] for e in entries} == {"done"}  # in Dubarr's recycle folder, so they can be restored
+    assert not engine.not_replaced_paths()

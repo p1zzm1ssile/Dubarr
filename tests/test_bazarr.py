@@ -89,6 +89,7 @@ def test_told_after_a_change_and_asked_to_search(fake_bazarr, tmp_path, monkeypa
     engine.scan()
     calls.clear()
     engine.apply("manual", force=True)
+    engine.wait_for_notices()
     actions = [(m, p, c.get("action")) for m, p, c in calls if m == "PATCH"]
     assert actions == [("PATCH", "/api/movies", "scan-disk"), ("PATCH", "/api/movies", "search-missing")]
     assert all(c.get("radarrid") == 42 for m, p, c in calls if m == "PATCH")
@@ -98,6 +99,7 @@ def test_told_after_a_change_and_asked_to_search(fake_bazarr, tmp_path, monkeypa
     engine.scan()
     calls.clear()
     engine.notify(movie_path)
+    engine.wait_for_notices()
     assert [c.get("action") for m, p, c in calls if m == "PATCH"] == ["scan-disk"]
 
 
@@ -195,3 +197,10 @@ def test_where_subtitle_files_came_from(fake_bazarr):
     assert web.with_source({"path": f"{folder}/Film.en.srt"}, sources)["source"] == "opensubtitlescom"
     assert web.with_source({"path": f"{folder}/Film.srt"}, sources)["from_bazarr"] is False
     assert web.with_source({"path": f"{folder}/Film.srt"}, None)["from_bazarr"] is None
+
+
+def test_bazarr_taking_its_time_isnt_an_error(fake_bazarr, monkeypatch):
+    def slow(*args, **kwargs):
+        raise requests.exceptions.ReadTimeout()
+    monkeypatch.setattr(requests, "request", slow)
+    Bazarr(config).action("series", 7, "scan-disk")  # Bazarr has it; it answers when it's done

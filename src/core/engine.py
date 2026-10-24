@@ -148,13 +148,17 @@ class Engine:
         self.last_detect = 0.0
         self.last_replace = 0.0
         self._detecting = threading.Lock()  # background detection only reads files, so it runs beside jobs
+        self._yield = 0         # jobs you started waiting for automatic tagging to finish its file: it holds off
+        self._notices = []      # files to tell Radarr, Sonarr, Bazarr and Jellyfin about, outside the job
+        self._notices_ready = threading.Condition()
+        self._notifier = None
         self._services = {}
         self._unreachable = {}  # Radarr, Sonarr or Jellyfin: when to try asking them again
 
     # Jobs
 
     @contextmanager
-    def job(self, task, wait=False):
+    def job(self, task, wait=False, automatic=False):
         cancelled = self._cancelled
         if wait:
             self._waiting.append(task)
@@ -171,7 +175,7 @@ class Engine:
         self._stop.clear()
         # done/total count files; bytes_done/bytes_total, when set, give a better time estimate for changes
         self.activity = {"task": task, "detail": "", "done": 0, "total": 0, "bytes_done": 0, "bytes_total": 0,
-                         "started": time.time()}
+                         "started": time.time(), "automatic": automatic}
         try:
             yield
         finally:
@@ -220,9 +224,14 @@ class Engine:
         return self._stopped_at >= started
 
     def background(self, target, *args, wait=False, **kwargs):
-        """Run a job in its own thread. Raises Busy straight away, unless wait is set."""
+        """Run a job in its own thread. Raises Busy straight away, unless wait is set. Automatic tagging doesn't
+        count as busy: it finishes the file it's on, then holds off while your job runs."""
+        yielding = False
         if not wait and self.busy():
-            raise Busy(f"Dubarr is busy: {self.activity['task'] if self.activity else 'working'}")
+            if not (self.activity and self.activity.get("automatic")):
+                raise Busy(f"Dubarr is busy: {self.activity['task'] if self.activity else 'working'}")
+            wait = yielding = True
+            self._yield += 1
 
         def run():
             try:
@@ -231,6 +240,9 @@ class Engine:
                 pass
             except Exception as e:
                 logger.exception(f"{target.__name__} failed: {e}")
+            finally:
+                if yielding:
+                    self._yield -= 1
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -631,6 +643,33 @@ class Engine:
                 logger.log("ACTION", f"{arr.name} deleted {title} ({path}), which has no audio, and is searching "
                            "for another copy" + (". The release it came from is blocklisted" if blocklisted else ""))
                 return True
+        # Not theirs, but they have the film or episode as missing: Dubarr deletes it, and they search
+        for arr in arrs:
+            try:
+                missing = arr.missing(path)
+            except ServiceError as e:
+                logger.warning(f"Couldn't ask {arr.name} about {path}: {e}")
+                continue
+            if not missing:
+                continue
+            title, command = missing
+            try:
+                history_id = swap.recycle_file(
+                    self.store, None, path, path, f"Deleted, as it has no audio. {arr.name} has {title} as missing "
+                    "and is searching for a copy", swap.recycle_root(library["path"], config.recycle_folder),
+                    config.recycle_days)
+            except (OSError, swap.SwapError) as e:
+                self._not_replaced[path] = f"Couldn't delete it: {getattr(e, 'strerror', None) or e}"
+                return False
+            self.store.forget(path)
+            self._not_replaced.pop(path, None)
+            logger.log("ACTION", f"Deleted {path}, which has no audio and isn't {arr.name}'s file for {title} "
+                       f"(change #{history_id}). {arr.name} has it as missing, so it's searching for a copy")
+            try:
+                arr.search(command)
+            except ServiceError as e:
+                logger.warning(f"Couldn't ask {arr.name} to search for {title}: {e}. Search for it there")
+            return True
         reasons = []
         for arr in arrs:
             try:
@@ -877,14 +916,14 @@ class Engine:
                 wanted[index] = code
         return wanted
 
-    def tag(self, path, changes, wait=False, guesses=None, since=None):
+    def tag(self, path, changes, wait=False, guesses=None, since=None, automatic=False):
         """Set the language of tracks, e.g. {2: "eng", 4: "fra"}. Returns what was done.
 
         guesses ({index: guess}) says the tags come from detection rather than from you. Unless every one is at
         least trust_confidence sure, the file then waits under Tagged automatically before tracks are removed.
         Tags you set yourself mean you've looked at the file, so any such wait ends.
         since is when the automatic tagging asking for this began: if Stop was pressed after that, it's dropped."""
-        with self.job("Tagging", wait=wait):
+        with self.job("Tagging automatically" if automatic else "Tagging", wait=wait, automatic=automatic):
             if guesses and since is not None and self.stopped_since(since):
                 return "Stopped"
             self.activity["detail"] = path
@@ -991,16 +1030,22 @@ class Engine:
                     continue
                 if row["links"] > 1 and not config.process_hardlinked:
                     continue  # still seeding: tagging would change the torrent's data, so it waits like any change
-                if self._tag_guesses(row["path"], sure, started) is None:
+                # Only while Dubarr is idle: automatic tagging never queues up behind, or in front of, your jobs
+                if (self.busy() or self._yield or self.stopped_since(started)
+                        or not in_window(config.auto_tag_from, config.auto_tag_until)):
+                    continue
+                if self._tag_guesses(row["path"], sure, started, automatic=True) is None:
                     # Failed: don't start a job for it every 10 minutes. It's tried again once the file changes
                     self._auto_failed.add((row["path"], row["size"], row["mtime"]))
         finally:
             self._detecting.release()
 
-    def _tag_guesses(self, path, guesses, since):
+    def _tag_guesses(self, path, guesses, since, automatic=False):
         try:
-            return self.tag(path, {i: g["language"] for i, g in guesses.items()}, wait=True, guesses=guesses,
-                            since=since)
+            return self.tag(path, {i: g["language"] for i, g in guesses.items()}, wait=not automatic,
+                            guesses=guesses, since=since, automatic=automatic)
+        except Busy:
+            return "Busy"  # a job started first; the suggestion stays and is tried at the next pass
         except (tagging.TagError, OSError) as e:
             logger.warning(f"Couldn't tag {path} from its suggestions: {e}")
             return None
@@ -1062,11 +1107,48 @@ class Engine:
         return self._services[kind][1]
 
     def notify(self, path):
-        """Ask Radarr or Sonarr, Bazarr and Jellyfin to read the changed file again."""
+        """Ask Radarr or Sonarr, Bazarr and Jellyfin to read the changed file again. Done in its own thread, so a
+        slow answer doesn't hold up the job: the next file can start straight away."""
+        with self._notices_ready:
+            if path not in self._notices:
+                self._notices.append(path)
+            if not self._notifier or not self._notifier.is_alive():
+                self._notifier = threading.Thread(target=self._send_notices, daemon=True)
+                self._notifier.start()
+            self._notices_ready.notify_all()
+
+    def _send_notices(self):
+        while True:
+            with self._notices_ready:
+                if not self._notices:
+                    self._notifier = None
+                    self._notices_ready.notify_all()
+                    return
+                path = self._notices[0]
+            try:
+                self.notify_now(path)
+            except Exception as e:
+                logger.warning(f"Couldn't tell the other apps about {path}: {e}")
+            with self._notices_ready:
+                self._notices.remove(path)
+
+    def wait_for_notices(self, timeout=30):
+        """Until every app has been told about the changes so far (for tests and shutdown)."""
+        with self._notices_ready:
+            self._notices_ready.wait_for(lambda: not self._notices, timeout)
+
+    def _down(self, kind, e):
+        """Note an app that couldn't be reached, so it isn't asked again for 10 minutes. Returns whether that's new."""
+        new = time.time() >= self._unreachable.get(kind, 0)
+        if isinstance(e, ServiceError) and ("Can't reach" in str(e) or "didn't answer in time" in str(e)):
+            self._unreachable[kind] = time.time() + 600
+        return new
+
+    def notify_now(self, path):
         found = {}
         for kind in ("radarr", "sonarr"):
             arr = self._service(kind)
-            if not arr:
+            if not arr or time.time() < self._unreachable.get(kind, 0):
                 continue
             try:
                 hit = arr.find(path)
@@ -1075,20 +1157,22 @@ class Engine:
                     arr.rescan(path)
                     logger.info(f"Asked {arr.name} to rescan {hit[1]}")
             except ServiceError as e:
-                logger.warning(f"Couldn't ask {arr.name} to rescan: {e}")
+                if self._down(kind, e):
+                    logger.warning(f"Couldn't ask {arr.name} to rescan: {e}")
         self._tell_bazarr(path, found)
         jellyfin = self._service("jellyfin")
-        if jellyfin:
+        if jellyfin and time.time() >= self._unreachable.get("jellyfin", 0):
             try:
                 jellyfin.updated(path)
             except ServiceError as e:
-                logger.warning(f"Couldn't tell Jellyfin about the change: {e}")
+                if self._down("jellyfin", e):
+                    logger.warning(f"Couldn't tell Jellyfin about the change: {e}")
 
     def _tell_bazarr(self, path, found):
         """Ask Bazarr to look at the film again and, if it's been left without subtitles in your languages,
         to search for some."""
         bazarr = self._service("bazarr")
-        if not bazarr:
+        if not bazarr or time.time() < self._unreachable.get("bazarr", 0):
             return
         try:
             if "radarr" in found:
@@ -1106,7 +1190,8 @@ class Engine:
                 bazarr.action(kind, item_id, "search-missing")
                 logger.info(f"Asked Bazarr to look for subtitles for {os.path.basename(path)}")
         except ServiceError as e:
-            logger.warning(f"Couldn't tell Bazarr about the change: {e}")
+            if self._down("bazarr", e):
+                logger.warning(f"Couldn't tell Bazarr about the change: {e}. Not asking it again for 10 minutes")
 
     def has_wanted_subtitles(self, path):
         """Whether a film has subtitles in a language you keep, inside it or beside it."""

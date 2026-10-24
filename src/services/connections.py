@@ -2,6 +2,7 @@
 Radarr or Sonarr replace a file that can't be fixed."""
 
 import posixpath
+import re
 import threading
 import time
 
@@ -11,6 +12,7 @@ from utils.languages import UNDEFINED, normalise
 from utils.paths import inside, to_local, to_remote
 
 CACHE_SECONDS = 600
+EPISODE = re.compile(r"[Ss](\d+)((?:[ -]?[Ee]\d+)+)")
 
 
 class ServiceError(Exception):
@@ -147,6 +149,33 @@ class Arr:
         self._request("POST", f"/history/failed/{grabs[0]['id']}")
         return True
 
+    def missing(self, local_path):
+        """When a file in their folder isn't theirs and they have the film or episode as missing (they didn't import
+        it, or lost track of it), the search to run once it's gone: (title, command). None otherwise, e.g. when
+        they have another copy, so this one is a leftover."""
+        found = self.find(local_path)
+        if not found or self._file(local_path, found[0]):
+            return None
+        item_id, title = found
+        if self.kind == "radarr":
+            if self._request("GET", "/moviefile", params={"movieId": item_id}):
+                return None
+            return title, {"name": "MoviesSearch", "movieIds": [item_id]}
+        numbers = EPISODE.search(posixpath.basename(local_path))
+        if not numbers:
+            return None
+        season = int(numbers.group(1))
+        wanted = {int(n) for n in re.findall(r"[Ee](\d+)", numbers.group(0))}
+        episodes = [e for e in self._request("GET", "/episode", params={"seriesId": item_id}) or []
+                    if e.get("seasonNumber") == season and e.get("episodeNumber") in wanted]
+        if not episodes or any(e.get("episodeFileId") for e in episodes):
+            return None
+        names = ", ".join(f"S{season:02d}E{e['episodeNumber']:02d}" for e in episodes)
+        return f"{title} {names}", {"name": "EpisodeSearch", "episodeIds": [e["id"] for e in episodes]}
+
+    def search(self, command):
+        self._request("POST", "/command", json=command)
+
     def why_not(self, local_path):
         """Why replace() can't do a file, when the film or series is theirs but the file isn't. None otherwise."""
         found = self.find(local_path)
@@ -212,13 +241,17 @@ class Bazarr:
         self._lists = {}
         self._lock = threading.Lock()
 
-    def _request(self, method, path, params=None):
+    def _request(self, method, path, params=None, slow_ok=False):
         try:
             response = requests.request(method, self.url + "/api" + path, headers={"X-API-KEY": self.api_key},
                                         params=params, data=params if method != "GET" else None,
                                         timeout=self.timeout)
             response.raise_for_status()
             return response.json() if response.content else None
+        except requests.exceptions.ReadTimeout as e:
+            if slow_ok:
+                return None  # Bazarr has it, and only answers once it's done
+            raise _error(e, self.name)
         except (requests.RequestException, ValueError) as e:
             raise _error(e, self.name)
 
@@ -284,11 +317,12 @@ class Bazarr:
         return None
 
     def action(self, kind, item_id, action):
-        """kind is "movie" or "series"; action is "scan-disk" or "search-missing"."""
+        """kind is "movie" or "series"; action is "scan-disk" or "search-missing". Bazarr only answers once it has
+        finished, which for a series with many episodes can take minutes, so not hearing back in time is fine."""
         if kind == "movie":
-            self._request("PATCH", "/movies", {"radarrid": item_id, "action": action})
+            self._request("PATCH", "/movies", {"radarrid": item_id, "action": action}, slow_ok=True)
         else:
-            self._request("PATCH", "/series", {"seriesid": item_id, "action": action})
+            self._request("PATCH", "/series", {"seriesid": item_id, "action": action}, slow_ok=True)
 
 
 class Jellyfin:
