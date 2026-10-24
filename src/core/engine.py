@@ -1002,6 +1002,25 @@ class Engine:
             logger.warning(f"Couldn't tag {path} from its suggestions: {e}")
             return None
 
+    def acceptable(self, minimum, library=None):
+        """What Accept all at this level would do: (files it would tag, the best suggestion below the level as a
+        percentage or None, how many files have a suggestion at all)."""
+        _, rows = self.store.files(statuses=[plans.UNKNOWN_AUDIO, plans.UNKNOWN_SUBTITLES], ignored=False,
+                                   limit=1_000_000, library=library)
+        files, best, suggested = 0, None, 0
+        for row in rows:
+            found = self.guesses(row)
+            if not found:
+                continue
+            suggested += 1
+            levels = [g["confidence"] * 100 for g in found.values()]
+            if any(level >= minimum for level in levels):
+                files += 1
+            below = [level for level in levels if level < minimum]
+            if below and (best is None or max(below) > best):
+                best = max(below)
+        return files, (round(best) if best is not None else None), suggested
+
     def accept_guesses(self, minimum, library=None, wait=True):
         """Tag every untagged track whose suggestion is at least minimum percent sure (Accept all)."""
         _, rows = self.store.files(statuses=[plans.UNKNOWN_AUDIO, plans.UNKNOWN_SUBTITLES], ignored=False,
