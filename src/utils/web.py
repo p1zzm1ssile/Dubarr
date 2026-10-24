@@ -335,6 +335,16 @@ class Handler(BaseHTTPRequestHandler):
                     engine.background(engine.replace_no_audio, "manual", paths, library)
                     return self.send(200, {"ok": True, "message": "Asking Radarr or Sonarr to replace them. "
                                            "They show under History as they're done"})
+                if path == "/api/delete-no-audio":
+                    paths = data.get("paths") or None
+                    if paths is not None and (not isinstance(paths, list) or not all(isinstance(p, str) for p in paths)):
+                        raise ValueError("paths must be a list")
+                    library = data.get("library") or None
+                    if library and library not in [lib["path"] for lib in config.library_list]:
+                        raise ValueError("That library isn't set up in Dubarr")
+                    engine.background(engine.delete_no_audio, paths, library)
+                    return self.send(200, {"ok": True, "message": "Deleting them into the recycle folder. "
+                                           "They can be restored from History"})
                 if path == "/api/remove":
                     file, tracks, files = data.get("path", ""), data.get("tracks") or [], data.get("files") or []
                     if not isinstance(tracks, list) or not isinstance(files, list):
@@ -487,11 +497,16 @@ def files(query):
             "mark_forced": (r["plan"] or {}).get("mark_forced", []),
             "files": [with_source(f, sources) for f in info.get("external", [])],
             "remove_files": [f["path"] for f in (r["plan"] or {}).get("remove_files", [])],
+            "not_replaced": engine.not_replaced(r["path"]) if r["status"] == plans.NO_AUDIO else None,
             "guesses": {i: {"language": g["language"], "name": name(g["language"]), "by": g["by"],
                             "confidence": round(g["confidence"], 2), "sure": g["confidence"] >= detection.CONFIDENT}
                         for i, g in engine.guesses(r).items()},
         })
-    return {"total": total, "files": out,
+    not_replaced = 0
+    if wanted == plans.NO_AUDIO:
+        not_replaced = sum(1 for p in engine.not_replaced_paths(library)
+                           if (row := engine.store.file(p)) and row["status"] == plans.NO_AUDIO and not row["ignored"])
+    return {"total": total, "files": out, "not_replaced": not_replaced,
             "detect": {"audio": detection.audio_enabled(), "subtitles": detection.subtitles_enabled()}}
 
 

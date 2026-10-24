@@ -392,6 +392,12 @@ async function showDashboard(selected) {
   const listTitle = el("h2");
   const listHelp = el("p", { class: "muted small" });
   const applyAll = el("button", { type: "button", class: "primary" });
+  // On No audio: delete the files Radarr and Sonarr couldn't replace
+  const deleteLeft = el("button", { type: "button", class: "danger", hidden: true });
+  deleteLeft.addEventListener("click", () => {
+    if (!confirm(`Delete the ${deleteLeft.dataset.count} file(s) with no audio that Radarr and Sonarr couldn't replace${library ? ` in ${library}` : ""}? They go to the recycle folder, so you can restore them from History.`)) return;
+    act("/api/delete-no-audio", { library: library || null }, deleteLeft);
+  });
   // Accept all: tag every untagged track whose suggestion is at least this sure
   const acceptLevel = el("input", { type: "number", min: 50, max: 100, value: 90, "aria-label": "How sure, in percent",
     class: "accept-level" });
@@ -423,7 +429,7 @@ async function showDashboard(selected) {
     notices, activity, stats, tiles,
     el("div", { class: "panel" },
       listTitle, listHelp,
-      el("div", { class: "toolbar" }, el("div", { style: "flex:1;min-width:200px" }, search), librarySelect, applyAll, accept, listResult),
+      el("div", { class: "toolbar" }, el("div", { style: "flex:1;min-width:200px" }, search), librarySelect, applyAll, deleteLeft, accept, listResult),
       el("div", { style: "overflow-x:auto" }, table), more));
 
   async function act(path, body, button, done) {
@@ -452,6 +458,15 @@ async function showDashboard(selected) {
           act("/api/replace", { paths: [f.path] }, b);
         });
         actions.push(b);
+        if (f.not_replaced) {
+          const d = el("button", { type: "button", class: "danger", text: "Delete",
+            title: "Delete it into the recycle folder, without a search. It can be restored from History" });
+          d.addEventListener("click", () => {
+            if (!confirm(`Delete ${name}? It goes to the recycle folder, so you can restore it from History.`)) return;
+            act("/api/delete-no-audio", { paths: [f.path] }, d);
+          });
+          actions.push(d);
+        }
       }
       if (["change", "too_small", "not_bazarr"].includes(f.status) && !f.ignored) {
         const b = el("button", { type: "button", text: f.status === "not_bazarr" ? "Remove" : "Apply" });
@@ -499,6 +514,7 @@ async function showDashboard(selected) {
           el("div", { class: "title", text: name }),
           el("div", { class: "path mono", text: folder }),
           el("div", { class: "small", text: f.message + (f.saved_bytes ? ` · saves ${bytes(f.saved_bytes)}` : "") }),
+          f.not_replaced ? el("div", { class: "small suggested", text: `Not replaced: ${f.not_replaced}` }) : null,
           suggested.length ? el("div", { class: "small suggested", text: "Suggested: " + suggested.map(([i, g]) => {
             const t = f.tracks.find((x) => String(x.index) === i);
             return `${t.type === "audio" ? "audio" : "subtitles"} track ${i} ${g.name} (${Math.round(g.confidence * 100)}%, ${g.by})`;
@@ -521,6 +537,9 @@ async function showDashboard(selected) {
     const params = new URLSearchParams({ status, search: search.value.trim(), offset: append ? shown.length : 0, library });
     const r = await api(`/api/files?${params}`);
     if (r.detect) { detection = r.detect; labelAccept(); }
+    deleteLeft.hidden = status !== "no_audio" || !r.not_replaced;
+    deleteLeft.dataset.count = r.not_replaced || 0;
+    deleteLeft.textContent = `Delete the ${r.not_replaced} that can't be replaced`;
     shown = append ? shown.concat(r.files) : r.files;
     total = r.total;
     renderRows();

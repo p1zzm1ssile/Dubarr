@@ -138,6 +138,7 @@ class Engine:
         self._stopped_at = 0.0  # when Stop was last pressed: automatic tagging queued before then is dropped
         self._cancelled = 0     # goes up with each Stop all: every job waiting its turn before then is dropped
         self._waiting = []      # the jobs waiting their turn, by name, for the web UI
+        self._not_replaced = {}  # path: why Radarr or Sonarr couldn't replace it, shown on the No audio list
         self._auto_failed = set()  # (path, size, mtime) automatic tagging couldn't do: not tried again until it changes
         self.activity = None          # what's happening now, for the web UI
         self.last_scan = 0.0
@@ -604,6 +605,9 @@ class Engine:
                     replaced += 1
             if replaced:
                 logger.log("ACTION", f"Replaced {replaced} file(s) with no audio through Radarr or Sonarr")
+            if len(rows) > replaced:
+                logger.warning(f"{len(rows) - replaced} file(s) with no audio couldn't be replaced. The No audio list "
+                               "says why for each one")
 
     def _replace_one(self, path, arrs):
         library = self.library_for(path)
@@ -615,8 +619,10 @@ class Engine:
                 result = arr.replace(path)
             except ServiceError as e:
                 logger.error(f"Couldn't have {arr.name} replace {path}: {e}")
+                self._not_replaced[path] = f"{arr.name} couldn't replace it: {e}"
                 return False
             if result:
+                self._not_replaced.pop(path, None)
                 title, blocklisted = result
                 message = (f"Deleted by {arr.name}, as it has no audio. {arr.name} is searching for another copy"
                            + (" and won't pick the same release again" if blocklisted else ""))
@@ -625,8 +631,65 @@ class Engine:
                 logger.log("ACTION", f"{arr.name} deleted {title} ({path}), which has no audio, and is searching "
                            "for another copy" + (". The release it came from is blocklisted" if blocklisted else ""))
                 return True
-        logger.warning(f"{path} has no audio, but neither Radarr nor Sonarr has it, so it's left alone")
+        reasons = []
+        for arr in arrs:
+            try:
+                reasons.append(arr.why_not(path))
+            except ServiceError:
+                pass
+        reason = next((r for r in reasons if r), None) or (
+            f"{' and '.join(a.name for a in arrs)} {'don' if len(arrs) > 1 else 'doesn'}'t have it. If "
+            f"{'they' if len(arrs) > 1 else 'it'} should, check the Folder mapping in Settings")
+        self._not_replaced[path] = reason
+        logger.warning(f"{path} has no audio, but wasn't replaced: {reason}")
         return False
+
+    def not_replaced(self, path):
+        return self._not_replaced.get(path)
+
+    def not_replaced_paths(self, library=None):
+        return [p for p in list(self._not_replaced) if not library or inside(p, library)]
+
+    def delete_no_audio(self, paths=None, library=None, wait=False):
+        """Delete files with no audio that Radarr and Sonarr can't replace, into the recycle folder so they can be
+        restored from History. Each is read again first, so only one that really has no audio goes."""
+        with self.job("Deleting files with no audio", wait=wait):
+            # Without paths: every file Radarr and Sonarr couldn't replace
+            paths = paths or self.not_replaced_paths(library)
+            rows = [r for r in (self.store.file(p) for p in paths)
+                    if r and r["status"] == plans.NO_AUDIO and not r["ignored"]]
+            if not rows:
+                return
+            self.activity["total"] = len(rows)
+            run_id = self.store.start_run("manual")
+            deleted = saved = 0
+            for row in rows:
+                if self._stop.is_set():
+                    break
+                path = row["path"]
+                self.activity["detail"] = path
+                self.activity["done"] += 1
+                library = self.library_for(path)
+                if not library or self.check_file(library, path, reread=True) != plans.NO_AUDIO:
+                    continue
+                try:
+                    size_before = os.path.getsize(path)
+                    history_id = swap.recycle_file(self.store, run_id, path, path, "Deleted: no audio",
+                                                   swap.recycle_root(library["path"], config.recycle_folder),
+                                                   config.recycle_days)
+                except (OSError, swap.SwapError) as e:
+                    logger.error(f"Couldn't delete {path}: {getattr(e, 'strerror', None) or e}")
+                    continue
+                self.store.forget(path)
+                self._not_replaced.pop(path, None)
+                deleted += 1
+                saved += size_before
+                logger.log("ACTION", f"Deleted {path}, which has no audio (change #{history_id})")
+                try:
+                    self.notify(path)
+                except Exception as e:
+                    logger.warning(f"Couldn't tell the other apps {path} was deleted: {e}")
+            self.store.finish_run(run_id, deleted, 0, saved)
 
     def remove_other_subtitles(self, trigger="scheduled", wait=False):
         """Remove the subtitle files Bazarr didn't download, from every file that has some, without changing the
