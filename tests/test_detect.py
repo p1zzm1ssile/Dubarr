@@ -365,3 +365,17 @@ def test_auto_tag_doesnt_start_a_job_every_pass_for_a_file_it_cant_tag(library, 
     assert jobs == ["Tagging"]  # broken.mkv once; seeding.mkv waits for seeding to stop
     assert engine.store.file(seeding)["status"] == plans.UNKNOWN_AUDIO
     assert engine.store.file(broken)["status"] == plans.UNKNOWN_AUDIO
+
+
+@needs_tools
+def test_says_what_accept_all_would_do(library, engine, monkeypatch):
+    film = make_video(str(library / "film.mkv"), audio=("eng", ""))
+    engine.scan()
+    assert engine.acceptable(90) == (0, None, 0)  # no suggestions yet
+    fake = whisper_says(monkeypatch, "it", 0.87)
+    try:
+        engine.guess_file(engine.store.file(film))
+    finally:
+        fake.close()
+    assert engine.acceptable(90) == (0, 87, 1)
+    assert engine.acceptable(80) == (1, None, 1)

@@ -216,10 +216,7 @@ def test_listen_and_tag(library, engine, ext):
     message = engine.tag(film, {"2": "ita"})
     assert message == "Tagged audio track 2 as Italian"
     assert tracks(film, "audio") == ["eng", "ita"]
-    if ext == ".mkv":
-        assert os.stat(film).st_ino == inode  # tagged in place, nothing copied
-    else:
-        assert engine.store.history()[1][0]["message"] == message  # the original MP4 can be restored
+    assert os.stat(film).st_ino == inode  # tagged in place, nothing copied
     # Now Dubarr knows what it is, it's an ordinary unwanted track
     assert engine.store.file(film)["status"] == plans.CHANGE
     assert engine.tag(film, {"2": "ita"}) == "Nothing to change"
@@ -246,6 +243,35 @@ def test_mp4_with_timecode_track(library, engine):
     info = probe(film)
     new = remux(info, decide(info, Rules(["eng"], ["eng"])))
     assert [t.language for t in new.of("audio")] == ["eng"]
+
+
+@pytest.mark.parametrize("faststart", [False, True])
+def test_mp4_tagged_in_place(library, engine, faststart):
+    """Only the two bytes holding each language change, wherever the MP4 keeps its track list."""
+    made = make_video(str(library / "made.mp4"), audio=("eng", "", ""), subtitles=("",))
+    film = str(library / "x.mp4")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", made, "-map", "0", "-c", "copy"]
+                   + (["-movflags", "+faststart"] if faststart else []) + [film], check=True)
+    os.remove(made)
+    with open(film, "rb") as f:
+        before = f.read()
+    engine.scan()
+    engine.tag(film, {"2": "fra", "3": "jpn", "4": "eng"})
+    assert tracks(film, "audio") == ["eng", "fra", "jpn"] and tracks(film, "subtitle") == ["eng"]
+    with open(film, "rb") as f:
+        after = f.read()
+    assert len(after) == len(before)
+    assert sum(a != b for a, b in zip(before, after)) <= 6
+    assert engine.store.history()[0] == 0  # nothing to restore: nothing was copied
+
+
+def test_mp4_copied_when_it_cant_be_tagged_in_place(library, engine, monkeypatch):
+    film = make_video(str(library / "x.mp4"), audio=("eng", ""))
+    engine.scan()
+    monkeypatch.setattr(tagging, "tag_mp4", lambda info, changes: False)
+    message = engine.tag(film, {"2": "ita"})
+    assert tracks(film, "audio") == ["eng", "ita"]
+    assert engine.store.history()[1][0]["message"] == message  # the original MP4 can be restored
 
 
 def test_no_tagging_while_seeding(library, engine, tmp_path):

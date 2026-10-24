@@ -378,10 +378,10 @@ class Handler(BaseHTTPRequestHandler):
                     # Checked now, so a mistake shows straight away; written in turn, so you can go on to the next film
                     if not engine.tags_wanted(file, tags):
                         return self.send(200, {"ok": True, "message": "Nothing to change"})
+                    busy = engine.busy()
                     engine.background(engine.tag, file, tags, wait=True)
-                    mp4 = not file.lower().endswith((".mkv", ".mk3d"))
-                    return self.send(200, {"ok": True, "message": "Saving. MP4 files are copied with the new tags, one "
-                                           "at a time, and show under History when done" if mp4 else "Saved"})
+                    return self.send(200, {"ok": True, "message": "Saving once the current job is done" if busy
+                                           else "Saved"})
                 if path == "/api/accept":
                     try:
                         minimum = int(data.get("minimum", 0))
@@ -392,9 +392,20 @@ class Handler(BaseHTTPRequestHandler):
                     library = data.get("library") or None
                     if library and library not in [lib["path"] for lib in config.library_list]:
                         raise ValueError("That library isn't set up in Dubarr")
+                    files, best, suggested = engine.acceptable(minimum, library)
+                    if not files:
+                        if not suggested:
+                            message = ("None of these files has a suggestion yet. Dubarr works through them in the "
+                                       "background, so check back later")
+                        else:
+                            message = (f"No suggestion is at least {minimum}% sure, so there's nothing to tag. "
+                                       + (f"The surest one left is {best}%. " if best is not None else "")
+                                       + "Tag automatically in Settings may already have tagged the ones above its "
+                                       "level. Try a lower level here, or tag the rest by hand")
+                        return self.send(200, {"ok": True, "message": message})
                     engine.background(engine.accept_guesses, minimum, library, wait=True)
-                    return self.send(200, {"ok": True, "message": f"Tagging the tracks at least {minimum}% sure. "
-                                           "They show under History as they're done"})
+                    return self.send(200, {"ok": True, "message": f"Tagging {files} file(s) with suggestions at least "
+                                           f"{minimum}% sure. They show under History as they're done"})
                 if path == "/api/looks-right":
                     engine.background(engine.looks_right, data.get("path", ""), wait=True)
                     return self.send(200, {"ok": True, "message": "Thanks. Dubarr changes it like any other file"})

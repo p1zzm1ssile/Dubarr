@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.4
+
+- **MP4s are tagged in a moment.** Setting a track's language on an MP4 used to copy the whole file, a minute or more for a big film, while MKVs took a second. MP4s are now tagged in place too: only the two bytes holding each track's language change, and the file is read back to check. The few laid out in a way that can't be done safely are still copied as before.
+- **Accept all says why it has nothing to do.** When no suggestion was sure enough, Accept all ran anyway and logged "tagged 0 file(s)". It now says so straight away, with the surest suggestion left (e.g. "The surest one left is 87%"), or that the files have no suggestions yet. With Tag automatically turned on, the suggestions above its level are already tagged, so Accept all at the same level finds none. When there is something to do, it says how many files it's tagging.
+
 ## 0.8.3
 
 - **Why a file with no audio wasn't replaced.** Replace only works for files Radarr or Sonarr have as theirs. Files they don't, such as a leftover copy beside the film or a folder they don't know, were silently left on the No audio list. Each one now says why, e.g. "Radarr has Film, but not this file" or "Radarr and Sonarr don't have it. If they should, check the Folder mapping in Settings".
