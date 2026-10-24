@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1
+
+- **Stop means stop.** Pressing Stop during a job, such as replacing files with no audio, let automatic tagging that was waiting its turn start straight after, so it looked as if the job had restarted. Stop now also drops automatic tagging and Accept all waiting behind the job; background tagging picks up again at its next pass, 10 minutes later. Tags you saved yourself are still written.
+
 ## 0.8.0
 
 - **Replace files with no audio.** Files under No audio on the Dashboard now have a Replace button, and the list has Replace all. Radarr or Sonarr deletes the file, blocklists the release it came from when their history shows it (so the same broken copy isn't downloaded again), and searches for another copy. For TV, only that episode is searched. Each one is listed in History. Files Radarr and Sonarr don't have, like extras, are left alone, and every file is read again first, so only one that really has no audio goes.
