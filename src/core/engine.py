@@ -643,6 +643,33 @@ class Engine:
                 logger.log("ACTION", f"{arr.name} deleted {title} ({path}), which has no audio, and is searching "
                            "for another copy" + (". The release it came from is blocklisted" if blocklisted else ""))
                 return True
+        # Not theirs, but they have the film or episode as missing: Dubarr deletes it, and they search
+        for arr in arrs:
+            try:
+                missing = arr.missing(path)
+            except ServiceError as e:
+                logger.warning(f"Couldn't ask {arr.name} about {path}: {e}")
+                continue
+            if not missing:
+                continue
+            title, command = missing
+            try:
+                history_id = swap.recycle_file(
+                    self.store, None, path, path, f"Deleted, as it has no audio. {arr.name} has {title} as missing "
+                    "and is searching for a copy", swap.recycle_root(library["path"], config.recycle_folder),
+                    config.recycle_days)
+            except (OSError, swap.SwapError) as e:
+                self._not_replaced[path] = f"Couldn't delete it: {getattr(e, 'strerror', None) or e}"
+                return False
+            self.store.forget(path)
+            self._not_replaced.pop(path, None)
+            logger.log("ACTION", f"Deleted {path}, which has no audio and isn't {arr.name}'s file for {title} "
+                       f"(change #{history_id}). {arr.name} has it as missing, so it's searching for a copy")
+            try:
+                arr.search(command)
+            except ServiceError as e:
+                logger.warning(f"Couldn't ask {arr.name} to search for {title}: {e}. Search for it there")
+            return True
         reasons = []
         for arr in arrs:
             try:

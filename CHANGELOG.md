@@ -2,6 +2,7 @@
 
 ## 0.8.5
 
+- **Replace works when Radarr or Sonarr has the film as missing.** A file with no audio that Radarr or Sonarr never imported (it shows as Missing there, with no file) couldn't be replaced, as they had no file to delete. Dubarr now deletes it itself, into the recycle folder so it can be restored from History, and asks them to search for the film or episode. A leftover copy beside a film they do have is still left for you to Delete.
 - **Automatic tagging gives way to you.** It only runs while Dubarr is idle, shows as "Tagging automatically", and never queues up behind a job you started. Starting a job while it's tagging no longer says Dubarr is busy: your job goes next, and automatic tagging waits for its next pass.
 - **Hours for automatic tagging.** Settings > Language detection has Only tag automatically from / Until (hour), e.g. 1 to 7 for overnight. Suggestions are still made at any time. Tag automatically stays off unless you set a level.
 - **Tagging no longer waits on Bazarr, Radarr, Sonarr or Jellyfin.** Telling them about a change now happens alongside, so the next file starts straight away. Each tag was taking 30 seconds while Bazarr didn't answer.
