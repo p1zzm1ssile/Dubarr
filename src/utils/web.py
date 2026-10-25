@@ -296,6 +296,9 @@ class Handler(BaseHTTPRequestHandler):
                         "min_saving_mb", "strip_subtitle_files", "prefer_text_files", "mux_subtitle_files", "keep_original_audio", "original_only_tag",
                         "libraries", "process_hardlinked"} & changes.keys():
                     engine.background(engine.scan, "settings", wait=True)
+                elif "trust_confidence" in changes and (waiting := engine.store.auto_tagged_paths()):
+                    # Files tagged from a guess wait or not depending on this level, so check them against it
+                    engine.background(engine.scan, "settings", paths=waiting, wait=True)
                 return self.send(200, {"ok": True, "values": config.public_values()})
 
             if path == "/api/test":
@@ -379,7 +382,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not engine.tags_wanted(file, tags):
                         return self.send(200, {"ok": True, "message": "Nothing to change"})
                     busy = engine.busy()
-                    engine.background(engine.tag, file, tags, wait=True)
+                    engine.save_tags(file, tags)
                     return self.send(200, {"ok": True, "message": "Saving once the current job is done" if busy
                                            else "Saved"})
                 if path == "/api/accept":
@@ -509,6 +512,7 @@ def files(query):
             "files": [with_source(f, sources) for f in info.get("external", [])],
             "remove_files": [f["path"] for f in (r["plan"] or {}).get("remove_files", [])],
             "not_replaced": engine.not_replaced(r["path"]) if r["status"] == plans.NO_AUDIO else None,
+            "saving": engine.saving(r["path"]),
             "guesses": {i: {"language": g["language"], "name": name(g["language"]), "by": g["by"],
                             "confidence": round(g["confidence"], 2), "sure": g["confidence"] >= detection.CONFIDENT}
                         for i, g in engine.guesses(r).items()},
@@ -518,7 +522,8 @@ def files(query):
         not_replaced = sum(1 for p in engine.not_replaced_paths(library)
                            if (row := engine.store.file(p)) and row["status"] == plans.NO_AUDIO and not row["ignored"])
     return {"total": total, "files": out, "not_replaced": not_replaced,
-            "detect": {"audio": detection.audio_enabled(), "subtitles": detection.subtitles_enabled()}}
+            "detect": {"audio": detection.audio_enabled(), "subtitles": detection.subtitles_enabled(),
+                       "trust": config.trust_confidence}}
 
 
 def with_source(file, sources):

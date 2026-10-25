@@ -323,12 +323,12 @@ FIELDS = [
     F("auto_tag_until", "detection", "Until (hour)", "int",
       env_int("AUTO_TAG_UNTIL", default=0), section="In the background", min=0, max=23),
     F("trust_confidence", "detection", "Change files straight away when at least this sure (%)", "int",
-      env_int("TRUST_CONFIDENCE", default=97), section="In the background", min=50, max=100,
+      env_int("TRUST_CONFIDENCE", default=100), section="In the background", min=50, max=100,
       help="A wrong tag could make Dubarr remove the wrong track. So when a file tagged automatically or with Accept "
            "all has tracks to remove, it's listed under \"Tagged automatically\" and they aren't removed until you "
-           "press Looks right, or for 7 days. Guesses at least this sure skip the wait, so those files go straight to "
-           "Will be changed. Files with nothing to remove go to their usual list, such as Already clean. 100 means "
-           "always wait."),
+           "press Looks right. Files whose guesses are all at least this sure skip that and go straight to Will be "
+           "changed. 100 means always wait for Looks right. Changing this checks the waiting files again. Files with "
+           "nothing to remove go to their usual list, such as Already clean."),
 ]
 
 def with_scheme(url):

@@ -141,6 +141,7 @@ class Engine:
         self._stopped_at = 0.0  # when Stop was last pressed: automatic tagging queued before then is dropped
         self._cancelled = 0     # goes up with each Stop all: every job waiting its turn before then is dropped
         self._waiting = []      # the jobs waiting their turn, by name, for the web UI
+        self._saving = {}       # {path: how saving your tags is going}, shown in the file's row
         self._not_replaced = {}  # path: why Radarr or Sonarr couldn't replace it, shown on the No audio list
         self._auto_failed = set()  # (path, size, mtime) automatic tagging couldn't do: not tried again until it changes
         self.activity = None          # what's happening now, for the web UI
@@ -387,7 +388,7 @@ class Engine:
                     status, plan = plans.CHANGE, files_only
                     message = f"{files_only.message}. The rest waits: {waiting[0].lower()}{waiting[1:]}"
         # A tag set from a guess could be wrong, and a wrong tag could remove the wrong track: wait for a check
-        held = self.store.held(path) if plan.rewrites else None
+        held = self.store.held(path, config.trust_confidence) if plan.rewrites else None
         if held:
             status = AUTO_TAGGED
             message = f"{held['message']}. Press Looks right to let Dubarr change it: {plan.message[0].lower()}{plan.message[1:]}"
@@ -934,6 +935,24 @@ class Engine:
                 wanted[index] = code
         return wanted
 
+    def save_tags(self, path, changes):
+        """Your tags for a file, written in turn so you can go on to the next one. saving() says how it's going."""
+        self._saving[path] = "Waiting to save the tags" if self.busy() else "Saving the tags"
+        self.background(self._save_tags, path, changes, wait=True)
+
+    def _save_tags(self, path, changes, wait=True):
+        try:
+            self.tag(path, changes, wait=wait)
+            self._saving.pop(path, None)
+        except Busy:
+            self._saving[path] = "The tags weren't saved: stopped"
+        except Exception as e:
+            self._saving[path] = f"The tags weren't saved: {e}"
+            raise
+
+    def saving(self, path):
+        return self._saving.get(path)
+
     def tag(self, path, changes, wait=False, guesses=None, since=None, automatic=False):
         """Set the language of tracks, e.g. {2: "eng", 4: "fra"}. Returns what was done.
 
@@ -944,6 +963,8 @@ class Engine:
         with self.job("Tagging automatically" if automatic else "Tagging", wait=wait, automatic=automatic):
             if guesses and since is not None and self.stopped_since(since):
                 return "Stopped"
+            if path in self._saving:
+                self._saving[path] = "Saving the tags"
             return self._write_tags(path, changes, guesses)
 
     def _write_tags(self, path, changes, guesses=None):
@@ -968,8 +989,7 @@ class Engine:
             used = [guesses[i] for i in wanted]
             message += " automatically (" + ", ".join(
                 f"{g['by']} {round(g['confidence'] * 100)}% sure" for g in used) + ")"
-            held = any(g["confidence"] * 100 < config.trust_confidence for g in used)
-            self.store.set_auto_tags(path, message, held)
+            self.store.set_auto_tags(path, message, min(g["confidence"] for g in used))
         else:
             self.store.release(path)
         try:
