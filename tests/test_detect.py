@@ -269,6 +269,68 @@ def test_auto_tag_waits_for_a_check_unless_very_sure(library, engine, monkeypatc
 
 
 @needs_tools
+def test_the_wait_follows_the_trust_level_as_it_is_now(library, engine, monkeypatch):
+    """No release after a few days: a file waits for Looks right, or until the level is lowered past its guess."""
+    from core import plan as plans
+    from core.engine import AUTO_TAGGED
+    film = make_video(str(library / "c.mkv"), audio=("eng", ""))
+    engine.scan()
+    monkeypatch.setattr(config, "trust_confidence", 100)
+    fake = whisper_says(monkeypatch, "it", 1.0)
+    try:
+        engine.guess_file(engine.store.file(film))
+    finally:
+        fake.close()
+    engine.accept_guesses(90)
+    assert engine.store.file(film)["status"] == AUTO_TAGGED  # 100 means always wait, even for a 100% guess
+    engine.store._run("UPDATE auto_tags SET tagged_at = 0")  # long ago
+    engine.scan(paths=engine.store.auto_tagged_paths())
+    assert engine.store.file(film)["status"] == AUTO_TAGGED
+    monkeypatch.setattr(config, "trust_confidence", 95)
+    engine.scan(paths=engine.store.auto_tagged_paths())
+    assert engine.store.file(film)["status"] == plans.CHANGE
+    monkeypatch.setattr(config, "trust_confidence", 100)
+    engine.scan(paths=engine.store.auto_tagged_paths())
+    assert engine.store.file(film)["status"] == AUTO_TAGGED
+
+
+@needs_tools
+def test_saving_your_tags_shows_in_the_files_row(library, engine):
+    film = make_video(str(library / "d.mkv"), audio=("eng", ""))
+    engine.scan()
+    with engine.job("Scanning"):
+        engine.save_tags(film, {"2": "fra"})
+        time.sleep(0.2)
+        assert engine.saving(film) == "Waiting to save the tags"
+    for _ in range(100):
+        if not engine.saving(film):
+            break
+        time.sleep(0.05)
+    assert engine.saving(film) is None
+    assert [t["language"] for t in engine.store.file(film)["info"]["tracks"] if t["type"] == "audio"] == ["eng", "fra"]
+
+
+def test_waiting_files_from_before_keep_their_guess(tmp_path):
+    """Databases from before 0.8.7 only said whether a file waited, not how sure the guess was."""
+    import sqlite3
+    from core.store import Store
+    db = str(tmp_path / "old.db")
+    old = sqlite3.connect(db)
+    old.execute("CREATE TABLE auto_tags (path TEXT PRIMARY KEY, message TEXT NOT NULL, held INTEGER NOT NULL, "
+                "tagged_at REAL NOT NULL)")
+    old.executemany("INSERT INTO auto_tags VALUES (?, ?, ?, ?)", [
+        ("/a.mkv", "Tagged audio 2 as Italian automatically (Whisper 93% sure, Whisper 88% sure)", 1, time.time()),
+        ("/b.mkv", "Tagged audio 2 as Italian", 1, time.time()),
+        ("/c.mkv", "Tagged audio 2 as Italian automatically (Whisper 80% sure)", 1, 0)])  # let go after 7 days
+    old.commit()
+    old.close()
+    store = Store(db)
+    assert store.held("/a.mkv", 90) and not store.held("/a.mkv", 85)
+    assert store.held("/b.mkv", 50)
+    assert store.auto_tagged_paths() == ["/a.mkv", "/b.mkv"]
+
+
+@needs_tools
 def test_accept_all_and_tagging_by_hand(library, engine, monkeypatch):
     from core import plan as plans
     from core.engine import AUTO_TAGGED

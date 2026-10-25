@@ -84,7 +84,7 @@ function splitPath(path) {
 }
 
 let languages = {};
-let detection = { audio: false, subtitles: false };  // which Detect buttons to show, from /api/files
+let detection = { audio: false, subtitles: false, trust: 100 };  // which Detect buttons to show, from /api/files
 const langName = (code) => languages[code] || { und: "Unknown", mul: "Multiple", zxx: "No speech" }[code] || code;
 
 let refreshTimer = null;
@@ -140,7 +140,7 @@ const STATUS_HELP = {
   no_wanted_audio: "None of the audio is in a language you keep, so Dubarr leaves these alone. Replace them in Radarr or Sonarr if you want them in your language.",
   unknown_audio: "At least one audio track has no language tag, so Dubarr can't tell what it is and leaves the file alone. Press Listen & tag to hear it and set its language; the tag is written into the file, so it won't come back here.",
   unknown_subtitles: "Nothing to remove, but a subtitle track has no language tag. Press Listen & tag to read a few lines and set its language, so Dubarr knows whether to keep it.",
-  auto_tagged: "Tagged from a detected language, which could be wrong, so Dubarr hasn't removed any tracks yet. Press Check tracks to listen, then Looks right to let Dubarr change the file as usual. After 7 days it goes ahead by itself.",
+  auto_tagged: "Tagged from a detected language, which could be wrong, so Dubarr hasn't removed any tracks yet. Press Check tracks to listen, then Looks right to let Dubarr change the file as usual.",
   unknown_original: "Nothing else to remove, but there's audio in another language that might be the original, and Always keep the original language audio is on. Connect Radarr or Sonarr so Dubarr knows the original language.",
   original_only: "None of your languages, but the audio in the original language is kept, e.g. Japanese-only anime. Nothing to do, unless you'd rather find a dubbed copy in Radarr or Sonarr.",
   error: "Files that couldn't be read or changed. The original is always left as it was.",
@@ -411,8 +411,10 @@ async function showDashboard(selected) {
   acceptButton.addEventListener("click", () => {
     const minimum = Number(acceptLevel.value);
     if (!(minimum >= 50 && minimum <= 100)) { flash(listResult, false, "Pick a level from 50% to 100%"); return; }
+    const trust = detection.trust >= 100 ? ""
+      : ` Files whose guesses are all at least ${detection.trust}% sure skip the wait (the level in Settings > Language detection).`;
     if (!confirm(`Tag every untagged track whose suggestion is at least ${minimum}% sure${library ? ` in ${library}` : ""}? `
-      + "Files tagged this way wait under Tagged automatically before any tracks are removed, unless the guess passes the level set in Settings > Language detection.")) return;
+      + `Files with tracks to remove then wait under Tagged automatically until you press Looks right.${trust}`)) return;
     act("/api/accept", { minimum, library: library || null }, acceptButton);
   });
   // "" for every library, or the one library to list and apply
@@ -489,12 +491,15 @@ async function showDashboard(selected) {
         actions.push(b);
       }
       const suggested = Object.entries(f.guesses || {}).filter(([i]) => f.tracks.some((t) => String(t.index) === i && t.language === "und"));
-      if (suggested.length && !f.ignored) {
+      const saving = f.saving && !f.saving.startsWith("The tags weren't");
+      if (suggested.length && !f.ignored && !saving) {
         const b = el("button", { type: "button", text: "Use suggestions",
           title: suggested.map(([i, g]) => `Track ${i}: ${g.name} (${Math.round(g.confidence * 100)}%)`).join(", ") });
-        b.addEventListener("click", () => act("/api/tag", { path: f.path, tags: Object.fromEntries(suggested.map(([i, g]) => [i, g.language])) }, b));
+        b.addEventListener("click", () => act("/api/tag", { path: f.path, tags: Object.fromEntries(suggested.map(([i, g]) => [i, g.language])) }, b,
+          () => { b.hidden = true; savingNote.textContent = "Saving the tags"; savingNote.hidden = false; }));
         actions.push(b);
       }
+      const savingNote = el("div", { class: `small ${saving || !f.saving ? "suggested" : "error-text"}`, text: f.saving || "", hidden: !f.saving, role: "status" });
       const panel = el("div");
       const untagged = f.tracks.some((t) => t.language === "und");
       if (f.tracks.length) {
@@ -515,6 +520,7 @@ async function showDashboard(selected) {
           el("div", { class: "path mono", text: folder }),
           el("div", { class: "small", text: f.message + (f.saved_bytes ? ` · saves ${bytes(f.saved_bytes)}` : "") }),
           f.not_replaced ? el("div", { class: "small suggested", text: `Not replaced: ${f.not_replaced}` }) : null,
+          savingNote,
           suggested.length ? el("div", { class: "small suggested", text: "Suggested: " + suggested.map(([i, g]) => {
             const t = f.tracks.find((x) => String(x.index) === i);
             return `${t.type === "audio" ? "audio" : "subtitles"} track ${i} ${g.name} (${Math.round(g.confidence * 100)}%, ${g.by})`;

@@ -9,6 +9,7 @@ One SQLite file in CONFIG_DIR. Five tables:
 """
 
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -72,15 +73,15 @@ CREATE TABLE IF NOT EXISTS guesses (
 CREATE TABLE IF NOT EXISTS auto_tags (
     path TEXT PRIMARY KEY,
     message TEXT NOT NULL,
-    held INTEGER NOT NULL,   -- tracks aren't removed until you've checked it, or HOLD_DAYS pass
-    tagged_at REAL NOT NULL
+    held INTEGER NOT NULL,   -- before 0.8.7: tracks wait for you to check it (now worked out from confidence)
+    tagged_at REAL NOT NULL,
+    confidence REAL          -- how sure the least sure guess was, 0 to 1
 );
 """
 
 RESTORABLE = "done"
 TAGGED = "tagged"  # a language tag set in place: nothing to restore
 REPLACED = "replaced"  # deleted through Radarr or Sonarr, which search for another copy
-HOLD_DAYS = 7
 
 
 class Store:
@@ -96,6 +97,16 @@ class Store:
             columns = {r["name"] for r in self._db.execute("PRAGMA table_info(history)").fetchall()}
             if "video" not in columns:
                 self._db.execute("ALTER TABLE history ADD COLUMN video TEXT")
+            # Added in 0.8.7: whether a file waits is decided against the trust level as it is now
+            columns = {r["name"] for r in self._db.execute("PRAGMA table_info(auto_tags)").fetchall()}
+            if "confidence" not in columns:
+                self._db.execute("ALTER TABLE auto_tags ADD COLUMN confidence REAL")
+                # Those already let go after the old 7-day wait count as checked
+                self._db.execute("DELETE FROM auto_tags WHERE tagged_at < ?", (time.time() - 7 * 86400,))
+                for row in self._db.execute("SELECT path, message, held FROM auto_tags").fetchall():
+                    sure = [int(n) for n in re.findall(r"(\d+)% sure", row["message"])]
+                    confidence = min(sure) / 100 if sure else (0 if row["held"] else 1)
+                    self._db.execute("UPDATE auto_tags SET confidence = ? WHERE path = ?", (confidence, row["path"]))
 
     def _all(self, sql, args=()):
         with self._lock:
@@ -248,16 +259,22 @@ class Store:
         rows = self._all("SELECT * FROM guesses WHERE path = ? AND size = ? AND mtime = ?", (path, size, mtime))
         return {r["idx"]: r for r in rows}
 
-    def set_auto_tags(self, path, message, held):
-        self._run("""INSERT INTO auto_tags (path, message, held, tagged_at) VALUES (?, ?, ?, ?)
-                     ON CONFLICT(path) DO UPDATE SET message=excluded.message, held=excluded.held,
-                       tagged_at=excluded.tagged_at""", (path, message, 1 if held else 0, time.time()))
+    def set_auto_tags(self, path, message, confidence):
+        """A file tagged from guesses; confidence is how sure the least sure one was."""
+        self._run("""INSERT INTO auto_tags (path, message, held, tagged_at, confidence) VALUES (?, ?, 0, ?, ?)
+                     ON CONFLICT(path) DO UPDATE SET message=excluded.message, tagged_at=excluded.tagged_at,
+                       confidence=excluded.confidence""", (path, message, time.time(), confidence))
 
-    def held(self, path):
-        """The automatic tagging a file waits on you to check, or None."""
-        row = self._one("SELECT * FROM auto_tags WHERE path = ? AND held = 1 AND tagged_at > ?",
-                        (path, time.time() - HOLD_DAYS * 86400))
-        return row
+    def held(self, path, trust):
+        """The automatic tagging a file waits on you to check, or None. It waits until you press Looks right,
+        unless every guess was at least trust (%) sure. 100 means always wait."""
+        row = self._one("SELECT * FROM auto_tags WHERE path = ?", (path,))
+        if row and (trust >= 100 or (row["confidence"] or 0) * 100 < trust):
+            return row
+        return None
+
+    def auto_tagged_paths(self):
+        return [r["path"] for r in self._all("SELECT path FROM auto_tags")]
 
     def release(self, path):
         """You've checked it, or tagged it yourself: its tracks can be changed as usual."""

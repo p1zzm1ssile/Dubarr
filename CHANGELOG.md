@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.7
+
+- **No more 7-day release.** Files under Tagged automatically now wait until you press Looks right, however long that takes (#18).
+- **The trust level defaults to 100.** Change files straight away when at least this sure (Settings > Language detection) now starts at 100%, which means files tagged automatically or with Accept all always wait for Looks right before tracks are removed. Lower it to let very sure guesses skip the wait. A level you already saved is kept (#18).
+- **Changing the trust level checks the waiting files again.** Lowering it to 90% moves the files whose guesses were all at least 90% sure on to Will be changed, and raising it holds them again if they haven't been changed yet (#18).
+- **Use suggestions shows its progress in the file's row.** The row says "Waiting to save the tags" or "Saving the tags" until it's done, and says why if they couldn't be saved (#18).
+- **Clearer Accept all question.** It shows the trust level itself instead of pointing to Settings, and leaves it out when every file will wait (#18).
+
 ## 0.8.6
 
 - **Put subtitle files into the film (optional).** A new setting in Settings > General, Put subtitle files beside films into them, off by default. Text subtitle files (SRT, ASS, VTT) beside a film, in a language you keep, go into the film as a track, and the file goes to the recycle folder so it can be restored from History. The language comes from the file's name, or is read from its text when the name doesn't say, and older Windows-1252 files are read correctly. A film that already has that language inside is left alone (#29).
