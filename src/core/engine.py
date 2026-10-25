@@ -13,7 +13,7 @@ from contextlib import contextmanager
 import utils.config as config
 from core import plan as plans
 from core import detect, swap, tagging
-from core.plan import NOT_FROM_BAZARR, Plan, Rules, _removal, decide
+from core.plan import NOT_FROM_BAZARR, Plan, Rules, _removal, decide, mergeable
 from core.probe import PROBE_VERSION, MediaInfo, ProbeError, find_sidecars, probe
 from core.remux import RemuxError, remux, supported
 from core.store import Store
@@ -38,6 +38,16 @@ NOTIFY_MOST_SECONDS = 300    # or after this, while changes keep coming
 
 class Busy(Exception):
     pass
+
+
+def added_tag(f):
+    """The language tag a subtitle file gets as it goes into the film. One read from its text is a guess, so the
+    track stays untagged, with the guess as a suggestion, unless Tag automatically is at or below how sure it is."""
+    if not f.get("guessed"):
+        return f["language"]
+    if config.auto_tag_confidence and f.get("guess_confidence", 0) * 100 >= config.auto_tag_confidence:
+        return f["language"]
+    return "und"
 
 
 def estimated_saving(plan):
@@ -360,16 +370,19 @@ class Engine:
                 return ERROR, f"Couldn't read the file: {e}", None, None, st
         # Subtitle files come and go without the video changing, so they're always looked at afresh
         info.external = find_sidecars(path)
-        if config.mux_subtitle_files:
-            # A file whose name doesn't say its language is read, so it can go into the film tagged
-            for f in info.external:
-                if f["text"] and f["language"] == "und":
-                    found = detect.file_language(f["path"])
-                    if found:
-                        f["language"], f["detected"] = found, True
+        # A file whose name doesn't say its language is read, so you can see what it is before putting it in
+        for f in info.external:
+            if f["text"] and f["language"] == "und":
+                found = detect.file_language(f["path"])
+                if found:
+                    f["guess"], f["guess_confidence"] = found
 
         rules = self.rules(library, path)
         plan = decide(info, rules)
+        for f in plan.add_files:
+            f["tag"] = added_tag(f)
+        if not plan.add_files:
+            plan.can_add = [f["path"] for f in mergeable(info, rules)]
         status, message = plan.status, plan.message
         if plan.rewrites:
             saving = estimated_saving(plan)
@@ -572,6 +585,10 @@ class Engine:
                     self.check_file(library, path)
                     return None
 
+        return self._carry_out(run_id, library, path, info, plan)
+
+    def _carry_out(self, run_id, library, path, info, plan):
+        """change_file()'s work once the plan is settled."""
         root = swap.recycle_root(library["path"], config.recycle_folder)
         saved = 0
         try:
@@ -583,6 +600,10 @@ class Engine:
                 logger.log("ACTION", f"{plan.message} from {path} (saved {size(info.size - new.size)}, change #{history_id})")
             for f in plan.add_files:
                 message = f"Put the {name(f['language'])} subtitle file into the film"
+                if f.get("guessed"):
+                    sure = round(f.get("guess_confidence", 0) * 100)
+                    message += (f", tagged automatically (Dubarr {sure}% sure)" if f["tag"] != "und"
+                                else f", untagged, as its language is a guess (Dubarr {sure}% sure)")
                 history_id = swap.recycle_file(self.store, run_id, f["path"], path, message, root, config.recycle_days)
                 logger.log("ACTION", f"Put {f['path']} into the film and moved it to the recycle folder "
                            f"(change #{history_id})")
@@ -605,8 +626,48 @@ class Engine:
             return False
 
         self.check_file(library, path, reread=True)
+        self._suggest_added(path, plan)
         self.notify(path)
         return saved
+
+    def _suggest_added(self, path, plan):
+        """Subtitle files put in untagged come last in the film: their guesses become its suggestions."""
+        guessed = [f for f in plan.add_files if f.get("tag") == "und"]
+        row = self.store.file(path) if guessed else None
+        if not row or not row["info"]:
+            return
+        subtitles = [t for t in row["info"]["tracks"] if t["type"] == "subtitle"][-len(plan.add_files):]
+        for t, f in zip(subtitles, plan.add_files):
+            if f.get("tag") == "und" and t["language"] == "und":
+                self.store.save_guess(path, t["index"], row["size"], row["mtime"], f["language"],
+                                      f.get("guess_confidence", 0), "Dubarr")
+
+    def add_subtitle_files(self, path, wait=False):
+        """Put the subtitle files beside a film into it, whichever list it's on. Returns what was done."""
+        with self.job("Putting subtitle files in", wait=wait):
+            self.activity["detail"] = path
+            library = self.library_for(path)
+            if not library:
+                raise tagging.TagError("This file isn't in a library set up in Dubarr")
+            status, _, plan, info, st = self.evaluate(library, path, reread=True)
+            if info is None:
+                raise tagging.TagError("Couldn't read the file")
+            if st.st_nlink > 1 and not config.process_hardlinked:
+                raise tagging.TagError("The file is hardlinked, probably still seeding. Putting subtitles in would "
+                                       "change the torrent's data too. Try again once seeding stops")
+            files = mergeable(info, self.rules(library, path))
+            if not files:
+                self.check_file(library, path)
+                return "No subtitle files to put in"
+            for f in files:
+                f["tag"] = added_tag(f)
+            n = len(files)
+            add = Plan(plans.CHANGE, f"Put {n} subtitle file{'s' if n > 1 else ''} into the film",
+                       keep=[t.index for t in info.tracks], add_files=files)
+            run_id = self.store.start_run("manual")
+            done = self._carry_out(run_id, library, path, info, add)
+            self.store.finish_run(run_id, 0 if done is False else 1, 1 if done is False else 0, 0)
+            return "Couldn't put them in, see the file's message" if done is False else add.message
 
     def replace_no_audio(self, trigger="manual", paths=None, library=None, wait=False):
         """Have Radarr or Sonarr delete files with no audio and search for another copy. Each file is read again

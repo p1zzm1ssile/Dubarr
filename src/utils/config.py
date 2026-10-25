@@ -149,8 +149,10 @@ FIELDS = [
     F("mux_subtitle_files", "general", "Put subtitle files beside films into them", "bool",
       env_bool("MUX_SUBTITLE_FILES", default=False), section="Languages",
       help="Text subtitle files (SRT, ASS, VTT) beside a film, in a language you keep, are put into the film as a "
-           "track and the file goes to the recycle folder. The language comes from the file's name, or is read from "
-           "its text when the name doesn't say. A film that already has that language inside is left alone. It means "
+           "track and the file goes to the recycle folder. The language comes from the file's name. When the name "
+           "doesn't say, it's read from the text, and as that's a guess the track goes in untagged with the guess as "
+           "a suggestion, unless Tag automatically allows it. A film that already has that language inside is left "
+           "alone. Off, a film's Put subtitle file in button does the same for one film. It means "
            "rewriting the whole film, so it waits while seeding like any change. Bazarr may download a file again if "
            "it no longer sees it. Off by default."),
     F("prefer_text_files", "general", "Remove picture subtitles when a text file is beside the film", "bool",

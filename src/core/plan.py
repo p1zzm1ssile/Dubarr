@@ -90,6 +90,7 @@ class Plan:
     remove_files: list = field(default_factory=list)  # subtitle files beside the video to remove
     original_only: str = None                    # the original language, when it's the only audio kept
     add_files: list = field(default_factory=list)  # subtitle files beside the video to put into it
+    can_add: list = field(default_factory=list)    # subtitle files that could go in, if you choose to
 
     @property
     def rewrites(self):
@@ -105,8 +106,24 @@ class Plan:
             "status": self.status, "message": self.message, "remove": self.remove,
             "keep": self.keep, "default_audio": self.default_audio, "saved_bytes": self.saved_bytes,
             "mark_forced": self.mark_forced, "remove_files": self.remove_files, "original_only": self.original_only,
-            "add_files": self.add_files,
+            "add_files": self.add_files, "can_add": self.can_add,
         }
+
+
+def mergeable(info, rules, skip=(), removed=()):
+    """The text subtitle files beside a film that could go into it: in a language you keep, going by the name or,
+    when the name doesn't say, by its text (guessed is then True), and not already inside."""
+    subtitles = [t for t in info.tracks if t.type == "subtitle" and t.index not in removed]
+    inside = {(t.language, t.forced) for t in subtitles}
+    found = []
+    for f in info.external:
+        language = f["language"] if f["language"] != UNDEFINED else f.get("guess")
+        if (f["path"] in skip or not f["text"] or language not in rules.subtitle_languages
+                or (language, f["forced"]) in inside):
+            continue
+        found.append({**f, "language": language, "guessed": f["language"] == UNDEFINED})
+        inside.add((language, f["forced"]))
+    return found
 
 
 def _languages(tracks):
@@ -338,13 +355,7 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
     if tracks and rules.mux_subtitle_files:
         removing_files = {f["path"] for f in remove_files}
         removed = {r["index"] for r in remove}
-        inside = {(t.language, t.forced) for t in subtitles if t.index not in removed}
-        for f in info.external:
-            if (f["path"] in removing_files or not f["text"] or f["language"] not in rules.subtitle_languages
-                    or (f["language"], f["forced"]) in inside):
-                continue
-            add_files.append(f)
-            inside.add((f["language"], f["forced"]))
+        add_files = mergeable(info, rules, skip=removing_files, removed=removed)
 
     untagged_subs = [t for t in subtitles if t.language == UNDEFINED]
     if not remove and not remove_files and not add_files:

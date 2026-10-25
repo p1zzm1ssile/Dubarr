@@ -94,7 +94,7 @@ def mkvmerge_command(source: str, target: str, info: MediaInfo, plan: Plan) -> l
     command += [source]
     # Subtitle files beside the film go in after its own tracks
     for f in plan.add_files:
-        command += ["--language", f"0:{bibliographic(f['language'])}"]
+        command += ["--language", f"0:{bibliographic(f.get('tag', f['language']))}"]
         if f.get("forced"):
             command += ["--forced-display-flag", "0:1"]
         if f.get("hearing_impaired"):
@@ -130,7 +130,7 @@ def ffmpeg_command(source: str, target: str, info: MediaInfo, plan: Plan) -> lis
     # MP4 holds text subtitles as mov_text, so files beside the film are converted (text only, nothing re-encoded)
     for n, f in enumerate(plan.add_files):
         position = len(kept_subs) + n
-        command += [f"-c:s:{position}", "mov_text", f"-metadata:s:s:{position}", f"language={bibliographic(f['language'])}",
+        command += [f"-c:s:{position}", "mov_text", f"-metadata:s:s:{position}", f"language={bibliographic(f.get('tag', f['language']))}",
                     f"-disposition:s:{position}", "forced" if f.get("forced") else "0"]
     command += ffmpeg_threads() + ["-movflags", "+faststart", "-f", "mp4"]
     return command + [target]
@@ -149,7 +149,7 @@ def verify(original: MediaInfo, new: MediaInfo, plan: Plan):
         if kind == "subtitle" and plan.add_files:
             # Files put into the film come after its own tracks, in their languages
             added = [t.language for t in new.of(kind)[len(expected):]]
-            if added != [f["language"] for f in plan.add_files]:
+            if added != [f.get("tag", f["language"]) for f in plan.add_files]:
                 raise RemuxError("The subtitle files didn't go into the new file as planned")
             got = got[:len(expected)]
         if expected != got:

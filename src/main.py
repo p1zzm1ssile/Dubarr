@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 
-__version__ = "0.8.7"
+__version__ = "0.8.8"
 
 
 def problems():

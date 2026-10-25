@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.8
+
+- **A subtitle file's language read from its text is a suggestion.** When a subtitle file's name doesn't say its language, the track it becomes goes into the film untagged, so the film shows under Untagged subtitles with the language Dubarr read as a suggestion to confirm. It's only tagged straight away when Tag automatically (Settings > Language detection) is set at or below how sure Dubarr is (#29).
+- **Put subtitle files in from any list.** Films with a subtitle file beside them that could go in, such as one under Untagged audio, or any film while Put subtitle files beside films into them is off, have a Put subtitle file in button (#29).
+- **Subtitle files show their language before you decide.** A file whose name doesn't say its language shows what its text looks like, e.g. "Unknown subs (looks English, 98%)". Remove subtitle files beside films in other languages still never removes these (#29).
+
 ## 0.8.7
 
 - **No more 7-day release.** Files under Tagged automatically now wait until you press Looks right, however long that takes (#18).
