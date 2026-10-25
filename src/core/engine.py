@@ -931,53 +931,57 @@ class Engine:
         with self.job("Tagging automatically" if automatic else "Tagging", wait=wait, automatic=automatic):
             if guesses and since is not None and self.stopped_since(since):
                 return "Stopped"
-            self.activity["detail"] = path
-            library = self.library_for(path)
-            if not library:
-                raise tagging.TagError("This file isn't in a library set up in Dubarr")
-            self.check_file(library, path, reread=True)
-            info = self.known_file(path)
-            wanted = self.tags_wanted(path, changes)
-            if not wanted:
-                return "Nothing to change"
+            return self._write_tags(path, changes, guesses)
 
-            st = os.stat(path)
-            if st.st_nlink > 1 and not config.process_hardlinked:
-                raise tagging.TagError("The file is hardlinked, probably still seeding. Changing its tags would change "
-                                       "the torrent's data too. Try again once seeding stops")
+    def _write_tags(self, path, changes, guesses=None):
+        """tag()'s work, inside a job that's already running."""
+        self.activity["detail"] = path
+        library = self.library_for(path)
+        if not library:
+            raise tagging.TagError("This file isn't in a library set up in Dubarr")
+        self.check_file(library, path, reread=True)
+        info = self.known_file(path)
+        wanted = self.tags_wanted(path, changes)
+        if not wanted:
+            return "Nothing to change"
 
-            message = tagging.describe_changes(info, wanted)
-            if guesses:
-                used = [guesses[i] for i in wanted]
-                message += " automatically (" + ", ".join(
-                    f"{g['by']} {round(g['confidence'] * 100)}% sure" for g in used) + ")"
-                held = any(g["confidence"] * 100 < config.trust_confidence for g in used)
-                self.store.set_auto_tags(path, message, held)
-            else:
-                self.store.release(path)
-            try:
-                if path.lower().endswith((".mkv", ".mk3d")):
-                    tagging.tag_mkv(info, wanted)
-                    if guesses:
-                        self.store.add_tag_history(path, message)
-                elif tagging.tag_mp4(info, wanted):
-                    if guesses:
-                        self.store.add_tag_history(path, message)
-                else:
-                    new = tagging.retag_mp4(info, wanted)
-                    swap.swap(self.store, None, path, info.size, new.size, message, [],
-                              swap.recycle_root(library["path"], config.recycle_folder), config.recycle_days)
-            except (tagging.TagError, RemuxError, swap.SwapError, OSError) as e:
+        st = os.stat(path)
+        if st.st_nlink > 1 and not config.process_hardlinked:
+            raise tagging.TagError("The file is hardlinked, probably still seeding. Changing its tags would change "
+                                   "the torrent's data too. Try again once seeding stops")
+
+        message = tagging.describe_changes(info, wanted)
+        if guesses:
+            used = [guesses[i] for i in wanted]
+            message += " automatically (" + ", ".join(
+                f"{g['by']} {round(g['confidence'] * 100)}% sure" for g in used) + ")"
+            held = any(g["confidence"] * 100 < config.trust_confidence for g in used)
+            self.store.set_auto_tags(path, message, held)
+        else:
+            self.store.release(path)
+        try:
+            if path.lower().endswith((".mkv", ".mk3d")):
+                tagging.tag_mkv(info, wanted)
                 if guesses:
-                    self.store.release(path)
-                reason = getattr(e, "strerror", None) or str(e)
-                logger.error(f"Couldn't tag {path}: {reason}. The original is untouched")
-                raise e if isinstance(e, tagging.TagError) else tagging.TagError(reason)
+                    self.store.add_tag_history(path, message)
+            elif tagging.tag_mp4(info, wanted):
+                if guesses:
+                    self.store.add_tag_history(path, message)
+            else:
+                new = tagging.retag_mp4(info, wanted)
+                swap.swap(self.store, None, path, info.size, new.size, message, [],
+                          swap.recycle_root(library["path"], config.recycle_folder), config.recycle_days)
+        except (tagging.TagError, RemuxError, swap.SwapError, OSError) as e:
+            if guesses:
+                self.store.release(path)
+            reason = getattr(e, "strerror", None) or str(e)
+            logger.error(f"Couldn't tag {path}: {reason}. The original is untouched")
+            raise e if isinstance(e, tagging.TagError) else tagging.TagError(reason)
 
-            logger.log("ACTION", f"{message} in {path}")
-            self.check_file(library, path, reread=True)
-            self.notify(path)
-            return message
+        logger.log("ACTION", f"{message} in {path}")
+        self.check_file(library, path, reread=True)
+        self.notify(path)
+        return message
 
     def looks_right(self, path, wait=False):
         """You've checked a file tagged automatically: its tracks can be changed as usual."""
@@ -1080,19 +1084,29 @@ class Engine:
         return files, (round(best) if best is not None else None), suggested
 
     def accept_guesses(self, minimum, library=None, wait=True):
-        """Tag every untagged track whose suggestion is at least minimum percent sure (Accept all)."""
-        _, rows = self.store.files(statuses=[plans.UNKNOWN_AUDIO, plans.UNKNOWN_SUBTITLES], ignored=False,
-                                   limit=1_000_000, library=library)
-        started = time.time()
-        tagged = 0
-        for row in rows:
-            if self.stopped_since(started):
-                break
-            sure = {i: g for i, g in self.guesses(row).items() if g["confidence"] * 100 >= minimum}
-            if sure and self._tag_guesses(row["path"], sure, started) not in (None, "Nothing to change", "Stopped"):
-                tagged += 1
-        stopped = " before Stop was pressed" if self.stopped_since(started) else ""
-        logger.log("ACTION", f"Accept all: tagged {tagged} file(s) from suggestions at least {minimum}% sure{stopped}")
+        """Tag every untagged track whose suggestion is at least minimum percent sure (Accept all), as one job,
+        so its progress shows and Stop stops it."""
+        with self.job("Accepting suggestions", wait=wait):
+            _, rows = self.store.files(statuses=[plans.UNKNOWN_AUDIO, plans.UNKNOWN_SUBTITLES], ignored=False,
+                                       limit=1_000_000, library=library)
+            todo = []
+            for row in rows:
+                sure = {i: g for i, g in self.guesses(row).items() if g["confidence"] * 100 >= minimum}
+                if sure:
+                    todo.append((row["path"], sure))
+            self.activity["total"] = len(todo)
+            tagged = 0
+            for path, sure in todo:
+                if self._stop.is_set():
+                    break
+                try:
+                    if self._write_tags(path, {i: g["language"] for i, g in sure.items()}, sure) != "Nothing to change":
+                        tagged += 1
+                except (tagging.TagError, OSError) as e:
+                    logger.warning(f"Couldn't tag {path} from its suggestions: {e}")
+                self.activity["done"] += 1
+            stopped = " before Stop was pressed" if self._stop.is_set() else ""
+            logger.log("ACTION", f"Accept all: tagged {tagged} file(s) from suggestions at least {minimum}% sure{stopped}")
 
     def purge(self):
         count = swap.purge(self.store, config.recycle_days)

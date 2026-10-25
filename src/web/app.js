@@ -261,7 +261,6 @@ function detectButton(file, t, preview, select) {
 }
 
 function tagPanel(file, onSaved) {
-  const isMp4 = /\.(mp4|m4v)$/i.test(file.path);
   const selects = {};
   const removeTrack = {};
   const removeFile = {};
@@ -270,6 +269,8 @@ function tagPanel(file, onSaved) {
 
   const rows = file.tracks.map((t) => {
     const preview = el("div", { class: "tag-preview" });
+    // Suggestions have their own place, so playing a sample or reading lines doesn't clear them
+    const suggested = el("div", { class: "tag-preview" });
     let button;
     if (t.type === "audio") {
       button = el("button", { type: "button", text: "Play a 30s sample" });
@@ -300,9 +301,9 @@ function tagPanel(file, onSaved) {
       });
     }
     selects[t.index] = languageSelect(t.language);
-    const detect = detectButton(file, t, preview, () => selects[t.index]);
+    const detect = detectButton(file, t, suggested, () => selects[t.index]);
     const guess = (file.guesses || {})[t.index];
-    if (guess && t.language === "und") preview.replaceChildren(suggestion(guess, () => selects[t.index]));
+    if (guess && t.language === "und") suggested.replaceChildren(suggestion(guess, () => selects[t.index]));
     removeTrack[t.index] = el("input", { type: "checkbox", "aria-label": `Remove track ${t.index}` });
     const details = [t.type === "audio" ? "Audio" : "Subtitles", `track ${t.index}`, t.codec,
       t.channels ? `${t.channels} ch` : "", t.title ? `“${t.title}”` : "",
@@ -313,7 +314,7 @@ function tagPanel(file, onSaved) {
           el("div", { class: "small muted", text: t.language === "und" ? "No language tag" : `Tagged ${langName(t.language)}` })),
         el("div", { class: "tag-controls" }, button, detect, selects[t.index],
           el("label", { class: "remove-pick" }, removeTrack[t.index], "Remove"))),
-      preview);
+      suggested, preview);
   });
 
   const fileRows = (file.files || []).map((f) => {
@@ -371,8 +372,7 @@ function tagPanel(file, onSaved) {
   return el("div", { class: "tag-panel" },
     el("p", { class: "small muted", text: "Listen to each track or read a few lines, choose its language, and save. "
       + "Or tick Remove on the tracks and subtitle files you don't want, and press Remove ticked. "
-      + (isMp4 ? "MP4 files can't be edited in place, so Dubarr writes a tagged copy and keeps the original in the recycle folder."
-        : "The tag is written into the file in a moment, without copying it, so the file won't be flagged again.") }),
+      + "The tag is written into the file in a moment, without copying it, so the file won't be flagged again." }),
     rows,
     fileRows,
     el("div", { class: "card-actions" }, save, remove, result));

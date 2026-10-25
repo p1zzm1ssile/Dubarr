@@ -307,19 +307,22 @@ def test_stop_drops_automatic_tagging_queued_behind_a_job(library, engine, monke
     finally:
         fake.close()
 
-    # Accept all stops at the next file
-    real_tag = engine.tag
+    # Accept all is one job, with its progress, and stops at the next file
+    real_write = engine._write_tags
+    seen = []
 
-    def tag_then_stop(*args, **kwargs):
-        result = real_tag(*args, **kwargs)
+    def write_then_stop(*args, **kwargs):
+        result = real_write(*args, **kwargs)
+        seen.append((engine.activity["task"], engine.activity["total"]))
         engine.stop()
         return result
 
-    monkeypatch.setattr(engine, "tag", tag_then_stop)
+    monkeypatch.setattr(engine, "_write_tags", write_then_stop)
     engine.accept_guesses(90)
+    assert seen == [("Accepting suggestions", 2)]
     statuses = sorted(engine.store.file(p)["status"] for p in (first, second))
     assert statuses.count(plans.UNKNOWN_AUDIO) == 1
-    monkeypatch.setattr(engine, "tag", real_tag)
+    monkeypatch.setattr(engine, "_write_tags", real_write)
 
     # Tagging that was waiting while Stop was pressed is dropped; tags you save yourself still go
     left = next(p for p in (first, second) if engine.store.file(p)["status"] == plans.UNKNOWN_AUDIO)

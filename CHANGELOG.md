@@ -2,6 +2,9 @@
 
 ## 0.8.6
 
+- **Accept all shows its progress.** It runs as one job, Accepting suggestions, with a count of files done and time left, instead of a string of separate Tagging jobs that read "0 file(s) so far". Stop stops it at the next file (#30).
+- **Where files tagged by Accept all go.** Only files with tracks to remove wait under Tagged automatically, and guesses at least as sure as the level in Settings > Language detection (97% unless changed) skip the wait. Files with nothing to remove go to their usual list, such as Already clean. The setting's help now says so (#30).
+- **Playing a sample keeps the suggestion.** Under Listen & tag, Play a 30s sample and Show some lines no longer clear Whisper's suggestion and its Use button (#31).
 - **Much lighter on the server.** Every tagged or changed file used to ask Sonarr (or Radarr) to rescan its whole series, and Bazarr to rescan it too, so tagging 50 episodes of a show meant 50 full rescans of that show at once. Changes are now gathered up and each film or series is rescanned once, a minute after the changes stop.
 - **Background detection keeps out of the way.** It only runs while Dubarr isn't doing anything else, stopping as soon as a job starts, rests a few seconds after each file it sends to Whisper, and keeps to the hours set in Settings > Language detection (now Only work in the background from / Until, covering detection as well as automatic tagging).
 
