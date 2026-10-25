@@ -58,3 +58,11 @@ def make_video(path, audio=("eng",), subtitles=(), default_audio=0, forced=()):
         subprocess.run(args, check=True)
     shutil.rmtree(work)
     return path
+
+
+@pytest.fixture(autouse=True)
+def quick_background(monkeypatch):
+    """No waiting for a quiet minute before telling the other apps, or resting between files, in tests."""
+    import core.engine
+    monkeypatch.setattr(core.engine, "NOTIFY_QUIET_SECONDS", 0.05)
+    monkeypatch.setattr(core.engine, "DETECT_PAUSE_SECONDS", 0)

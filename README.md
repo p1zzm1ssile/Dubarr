@@ -26,6 +26,7 @@ It's built to be safe to leave running:
 | Commentary tracks | Removes them (can be turned off) |
 | Several audio tracks in one language | Keeps the best-quality one (can be turned off) |
 | Subtitle files beside the film (Film.fr.srt) in other languages | Removes them, no rewrite needed (can be turned off) |
+| Subtitle files beside the film in languages you keep | Leaves them, or puts them into the film if you turn that on (Settings > General) |
 | Subtitle files beside the film that Bazarr didn't download | Keeps them, or lists or removes them if you choose (Settings > Bazarr) |
 | Several subtitle tracks in one language | Keeps one full track, preferring text (SRT) and normal over SDH, plus the forced one (can be turned off) |
 

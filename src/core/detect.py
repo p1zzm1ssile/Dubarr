@@ -13,7 +13,8 @@ import requests
 
 import utils.config as config
 from core.probe import MediaInfo
-from core.tagging import TEXT_SUBTITLES, TagError, audio_sample, subtitle_lines
+from core.tagging import MARKUP as TAG_MARKUP, TEXT_SUBTITLES, TIMESTAMP as TIMESTAMP_LINE, TagError, audio_sample, \
+    subtitle_lines
 from services.connections import ServiceError, _error
 from utils.languages import LANGUAGES, name, normalise
 from utils.proc import wrap
@@ -113,6 +114,31 @@ def _built_in(text: str) -> tuple:
             _identifier = LanguageIdentifier.from_model_file(MODEL_FILE, norm_probs=True)
     code, confidence = _identifier.classify(text)
     return normalise(code), float(confidence)
+
+
+def file_language(path: str):
+    """The language of a subtitle file beside a film, read by the built-in detector. None unless it's sure."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(200_000)
+    except OSError:
+        return None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252", errors="replace")
+    lines = []
+    for line in text.splitlines():
+        if line.startswith("Dialogue:"):
+            line = line.split(",", 9)[-1].replace("\\N", " ")  # ASS: the words come after nine fields
+        line = TAG_MARKUP.sub("", line).strip()
+        if line and not line.isdigit() and not TIMESTAMP_LINE.match(line) and not line.startswith(("[", "Style:", "Format:")):
+            lines.append(line)
+    words = "\n".join(lines)[:3000]
+    if len(words) < 20:
+        return None
+    code, confidence = _built_in(words)
+    return code if code in LANGUAGES and confidence >= CONFIDENT else None
 
 
 def _ollama(cfg, text: str) -> tuple:

@@ -11,6 +11,7 @@ import subprocess
 
 from core.plan import Plan
 from core.probe import MediaInfo, ProbeError, probe
+from utils.languages import bibliographic
 from utils.proc import ffmpeg_threads, wrap
 
 MKV = (".mkv", ".mk3d")
@@ -49,6 +50,18 @@ def _last_line(text, fallback):
     return lines[-1] if lines else fallback
 
 
+def charset(path: str):
+    """A subtitle file's character set when it isn't UTF-8: older ones are often Windows-1252."""
+    try:
+        with open(path, "rb") as f:
+            f.read().decode("utf-8")
+        return None
+    except UnicodeDecodeError:
+        return "cp1252"
+    except OSError:
+        return None
+
+
 def mkvmerge_ids(path: str, timeout: int = 120) -> dict:
     """track id -> type, as mkvmerge sees the file."""
     result = _run(["mkvmerge", "-J", path], timeout)
@@ -78,15 +91,33 @@ def mkvmerge_command(source: str, target: str, info: MediaInfo, plan: Plan) -> l
             command += ["--default-track-flag", f"{index}:{1 if index == plan.default_audio else 0}"]
     for index in plan.mark_forced:
         command += ["--forced-display-flag", f"{index}:1"]
-    return command + [source]
+    command += [source]
+    # Subtitle files beside the film go in after its own tracks
+    for f in plan.add_files:
+        command += ["--language", f"0:{bibliographic(f['language'])}"]
+        if f.get("forced"):
+            command += ["--forced-display-flag", "0:1"]
+        if f.get("hearing_impaired"):
+            command += ["--track-name", "0:SDH"]
+        if charset(f["path"]):
+            command += ["--sub-charset", f"0:{charset(f['path'])}"]
+        command.append(f["path"])
+    return command
 
 
 def ffmpeg_command(source: str, target: str, info: MediaInfo, plan: Plan) -> list:
     removed = {r["index"] for r in plan.remove}
     # Data streams (timecode, chapter text) can't be copied into MP4. ffmpeg rebuilds them from the metadata
-    command = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", source, "-map", "0", "-map", "-0:d"]
+    command = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", source]
+    for f in plan.add_files:
+        if charset(f["path"]):
+            command += ["-sub_charenc", charset(f["path"])]
+        command += ["-i", f["path"]]
+    command += ["-map", "0", "-map", "-0:d"]
     for index in sorted(removed):
         command += ["-map", f"-0:{index}"]
+    for n, _ in enumerate(plan.add_files, start=1):
+        command += ["-map", f"{n}:0"]
     command += ["-c", "copy", "-map_metadata", "0", "-map_chapters", "0"]
     if plan.default_audio is not None:
         kept_audio = [t.index for t in info.of("audio") if t.index not in removed]
@@ -96,6 +127,11 @@ def ffmpeg_command(source: str, target: str, info: MediaInfo, plan: Plan) -> lis
     for position, index in enumerate(kept_subs):
         if index in plan.mark_forced:
             command += [f"-disposition:s:{position}", "+forced"]
+    # MP4 holds text subtitles as mov_text, so files beside the film are converted (text only, nothing re-encoded)
+    for n, f in enumerate(plan.add_files):
+        position = len(kept_subs) + n
+        command += [f"-c:s:{position}", "mov_text", f"-metadata:s:s:{position}", f"language={bibliographic(f['language'])}",
+                    f"-disposition:s:{position}", "forced" if f.get("forced") else "0"]
     command += ffmpeg_threads() + ["-movflags", "+faststart", "-f", "mp4"]
     return command + [target]
 
@@ -110,6 +146,12 @@ def verify(original: MediaInfo, new: MediaInfo, plan: Plan):
     for kind in ("video", "audio", "subtitle"):
         expected = summary([t for t in original.of(kind) if t.index in kept])
         got = summary(new.of(kind))
+        if kind == "subtitle" and plan.add_files:
+            # Files put into the film come after its own tracks, in their languages
+            added = [t.language for t in new.of(kind)[len(expected):]]
+            if added != [f["language"] for f in plan.add_files]:
+                raise RemuxError("The subtitle files didn't go into the new file as planned")
+            got = got[:len(expected)]
         if expected != got:
             raise RemuxError(f"The new file's {kind} tracks aren't what was planned "
                              f"(expected {len(expected)}, found {len(got)})")

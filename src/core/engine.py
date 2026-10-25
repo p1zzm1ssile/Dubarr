@@ -31,6 +31,9 @@ AUTO_TAGGED = "auto_tagged"  # tagged from a guess: tracks wait until you've che
 
 APPLY_EVERY_SECONDS = 600
 DETECT_EVERY_SECONDS = 600
+DETECT_PAUSE_SECONDS = 5     # between files in background detection, so Whisper and the disks get a rest
+NOTIFY_QUIET_SECONDS = 60    # the other apps are told once changes have stopped for this long
+NOTIFY_MOST_SECONDS = 300    # or after this, while changes keep coming
 
 
 class Busy(Exception):
@@ -152,6 +155,8 @@ class Engine:
         self._notices = []      # files to tell Radarr, Sonarr, Bazarr and Jellyfin about, outside the job
         self._notices_ready = threading.Condition()
         self._notifier = None
+        self.notify_quiet = NOTIFY_QUIET_SECONDS
+        self.detect_pause = DETECT_PAUSE_SECONDS
         self._services = {}
         self._unreachable = {}  # Radarr, Sonarr or Jellyfin: when to try asking them again
 
@@ -257,7 +262,7 @@ class Engine:
                      config.strip_commentary, config.one_audio_per_language, config.one_subtitle_per_language,
                      config.assume_unlabelled_is_full, config.strip_subtitle_files, config.prefer_text_files,
                      config.keep_original_audio, self.original_language(path) if path else None,
-                     self.bazarr_files(path) if path else None)
+                     self.bazarr_files(path) if path else None, config.mux_subtitle_files)
 
     def bazarr_files(self, path):
         """The subtitle files Bazarr downloaded, when Dubarr is to keep only those and Bazarr looks after this film
@@ -354,6 +359,13 @@ class Engine:
                 return ERROR, f"Couldn't read the file: {e}", None, None, st
         # Subtitle files come and go without the video changing, so they're always looked at afresh
         info.external = find_sidecars(path)
+        if config.mux_subtitle_files:
+            # A file whose name doesn't say its language is read, so it can go into the film tagged
+            for f in info.external:
+                if f["text"] and f["language"] == "und":
+                    found = detect.file_language(f["path"])
+                    if found:
+                        f["language"], f["detected"] = found, True
 
         rules = self.rules(library, path)
         plan = decide(info, rules)
@@ -362,7 +374,8 @@ class Engine:
             saving = estimated_saving(plan)
             minimum = config.min_saving_mb * 1024 * 1024
             waiting = None
-            if minimum and saving is not None and saving < minimum and not allow_small:
+            # Putting subtitle files into the film is something you turned on, so it isn't held back for its size
+            if minimum and saving is not None and saving < minimum and not allow_small and not plan.add_files:
                 status, waiting = TOO_SMALL, f"Saves less than the {size(minimum)} set, so it's left for now"
             elif st.st_nlink > 1 and not config.process_hardlinked:
                 status, waiting = SEEDING, "Waiting: the file is hardlinked, probably still seeding"
@@ -567,6 +580,11 @@ class Engine:
                                        root, config.recycle_days)
                 saved += info.size - new.size
                 logger.log("ACTION", f"{plan.message} from {path} (saved {size(info.size - new.size)}, change #{history_id})")
+            for f in plan.add_files:
+                message = f"Put the {name(f['language'])} subtitle file into the film"
+                history_id = swap.recycle_file(self.store, run_id, f["path"], path, message, root, config.recycle_days)
+                logger.log("ACTION", f"Put {f['path']} into the film and moved it to the recycle folder "
+                           f"(change #{history_id})")
             for f in plan.remove_files:
                 if f["reason"] == NOT_FROM_BAZARR:
                     message, why = "Removed a subtitle file beside the film that Bazarr didn't download", \
@@ -926,53 +944,57 @@ class Engine:
         with self.job("Tagging automatically" if automatic else "Tagging", wait=wait, automatic=automatic):
             if guesses and since is not None and self.stopped_since(since):
                 return "Stopped"
-            self.activity["detail"] = path
-            library = self.library_for(path)
-            if not library:
-                raise tagging.TagError("This file isn't in a library set up in Dubarr")
-            self.check_file(library, path, reread=True)
-            info = self.known_file(path)
-            wanted = self.tags_wanted(path, changes)
-            if not wanted:
-                return "Nothing to change"
+            return self._write_tags(path, changes, guesses)
 
-            st = os.stat(path)
-            if st.st_nlink > 1 and not config.process_hardlinked:
-                raise tagging.TagError("The file is hardlinked, probably still seeding. Changing its tags would change "
-                                       "the torrent's data too. Try again once seeding stops")
+    def _write_tags(self, path, changes, guesses=None):
+        """tag()'s work, inside a job that's already running."""
+        self.activity["detail"] = path
+        library = self.library_for(path)
+        if not library:
+            raise tagging.TagError("This file isn't in a library set up in Dubarr")
+        self.check_file(library, path, reread=True)
+        info = self.known_file(path)
+        wanted = self.tags_wanted(path, changes)
+        if not wanted:
+            return "Nothing to change"
 
-            message = tagging.describe_changes(info, wanted)
-            if guesses:
-                used = [guesses[i] for i in wanted]
-                message += " automatically (" + ", ".join(
-                    f"{g['by']} {round(g['confidence'] * 100)}% sure" for g in used) + ")"
-                held = any(g["confidence"] * 100 < config.trust_confidence for g in used)
-                self.store.set_auto_tags(path, message, held)
-            else:
-                self.store.release(path)
-            try:
-                if path.lower().endswith((".mkv", ".mk3d")):
-                    tagging.tag_mkv(info, wanted)
-                    if guesses:
-                        self.store.add_tag_history(path, message)
-                elif tagging.tag_mp4(info, wanted):
-                    if guesses:
-                        self.store.add_tag_history(path, message)
-                else:
-                    new = tagging.retag_mp4(info, wanted)
-                    swap.swap(self.store, None, path, info.size, new.size, message, [],
-                              swap.recycle_root(library["path"], config.recycle_folder), config.recycle_days)
-            except (tagging.TagError, RemuxError, swap.SwapError, OSError) as e:
+        st = os.stat(path)
+        if st.st_nlink > 1 and not config.process_hardlinked:
+            raise tagging.TagError("The file is hardlinked, probably still seeding. Changing its tags would change "
+                                   "the torrent's data too. Try again once seeding stops")
+
+        message = tagging.describe_changes(info, wanted)
+        if guesses:
+            used = [guesses[i] for i in wanted]
+            message += " automatically (" + ", ".join(
+                f"{g['by']} {round(g['confidence'] * 100)}% sure" for g in used) + ")"
+            held = any(g["confidence"] * 100 < config.trust_confidence for g in used)
+            self.store.set_auto_tags(path, message, held)
+        else:
+            self.store.release(path)
+        try:
+            if path.lower().endswith((".mkv", ".mk3d")):
+                tagging.tag_mkv(info, wanted)
                 if guesses:
-                    self.store.release(path)
-                reason = getattr(e, "strerror", None) or str(e)
-                logger.error(f"Couldn't tag {path}: {reason}. The original is untouched")
-                raise e if isinstance(e, tagging.TagError) else tagging.TagError(reason)
+                    self.store.add_tag_history(path, message)
+            elif tagging.tag_mp4(info, wanted):
+                if guesses:
+                    self.store.add_tag_history(path, message)
+            else:
+                new = tagging.retag_mp4(info, wanted)
+                swap.swap(self.store, None, path, info.size, new.size, message, [],
+                          swap.recycle_root(library["path"], config.recycle_folder), config.recycle_days)
+        except (tagging.TagError, RemuxError, swap.SwapError, OSError) as e:
+            if guesses:
+                self.store.release(path)
+            reason = getattr(e, "strerror", None) or str(e)
+            logger.error(f"Couldn't tag {path}: {reason}. The original is untouched")
+            raise e if isinstance(e, tagging.TagError) else tagging.TagError(reason)
 
-            logger.log("ACTION", f"{message} in {path}")
-            self.check_file(library, path, reread=True)
-            self.notify(path)
-            return message
+        logger.log("ACTION", f"{message} in {path}")
+        self.check_file(library, path, reread=True)
+        self.notify(path)
+        return message
 
     def looks_right(self, path, wait=False):
         """You've checked a file tagged automatically: its tracks can be changed as usual."""
@@ -1003,22 +1025,28 @@ class Engine:
 
     def detect_pass(self):
         """Work through the untagged lists in the background, keeping a suggestion for each track, and tag the
-        ones sure enough if that's turned on. Only reads files, so jobs carry on beside it; tagging waits its turn."""
+        ones sure enough if that's turned on. Only while Dubarr is idle and within the hours set for background
+        work, with a pause between files: it stops as soon as a job starts and carries on at the next pass."""
         if not self._detecting.acquire(blocking=False):
             return
         try:
             started = self.last_detect = time.time()
-            if not config.detect_in_background:
+            if not config.detect_in_background or not in_window(config.auto_tag_from, config.auto_tag_until):
                 return
             _, rows = self.store.files(statuses=[plans.UNKNOWN_AUDIO, plans.UNKNOWN_SUBTITLES], ignored=False,
                                        limit=1_000_000)
             for row in rows:
-                if self.stopped_since(started):
+                if self.stopped_since(started) or self.busy() or self._yield:
                     return  # the next pass carries on, in 10 minutes
                 if not config.detect_in_background or not row["info"]:
                     continue
+                if not in_window(config.auto_tag_from, config.auto_tag_until):
+                    return
                 try:
+                    asked = len(self.store.guesses(row["path"], row["size"], row["mtime"]))
                     found = self.guess_file(row)
+                    if self.detect_pause and len(self.store.guesses(row["path"], row["size"], row["mtime"])) > asked:
+                        self._stop.wait(self.detect_pause)  # Whisper was asked: give it and the disks a rest
                 except detect.ServiceError as e:
                     logger.warning(f"Background language detection: {e}. Trying again in 10 minutes")
                     return
@@ -1031,8 +1059,7 @@ class Engine:
                 if row["links"] > 1 and not config.process_hardlinked:
                     continue  # still seeding: tagging would change the torrent's data, so it waits like any change
                 # Only while Dubarr is idle: automatic tagging never queues up behind, or in front of, your jobs
-                if (self.busy() or self._yield or self.stopped_since(started)
-                        or not in_window(config.auto_tag_from, config.auto_tag_until)):
+                if self.busy() or self._yield or self.stopped_since(started):
                     continue
                 if self._tag_guesses(row["path"], sure, started, automatic=True) is None:
                     # Failed: don't start a job for it every 10 minutes. It's tried again once the file changes
@@ -1070,19 +1097,29 @@ class Engine:
         return files, (round(best) if best is not None else None), suggested
 
     def accept_guesses(self, minimum, library=None, wait=True):
-        """Tag every untagged track whose suggestion is at least minimum percent sure (Accept all)."""
-        _, rows = self.store.files(statuses=[plans.UNKNOWN_AUDIO, plans.UNKNOWN_SUBTITLES], ignored=False,
-                                   limit=1_000_000, library=library)
-        started = time.time()
-        tagged = 0
-        for row in rows:
-            if self.stopped_since(started):
-                break
-            sure = {i: g for i, g in self.guesses(row).items() if g["confidence"] * 100 >= minimum}
-            if sure and self._tag_guesses(row["path"], sure, started) not in (None, "Nothing to change", "Stopped"):
-                tagged += 1
-        stopped = " before Stop was pressed" if self.stopped_since(started) else ""
-        logger.log("ACTION", f"Accept all: tagged {tagged} file(s) from suggestions at least {minimum}% sure{stopped}")
+        """Tag every untagged track whose suggestion is at least minimum percent sure (Accept all), as one job,
+        so its progress shows and Stop stops it."""
+        with self.job("Accepting suggestions", wait=wait):
+            _, rows = self.store.files(statuses=[plans.UNKNOWN_AUDIO, plans.UNKNOWN_SUBTITLES], ignored=False,
+                                       limit=1_000_000, library=library)
+            todo = []
+            for row in rows:
+                sure = {i: g for i, g in self.guesses(row).items() if g["confidence"] * 100 >= minimum}
+                if sure:
+                    todo.append((row["path"], sure))
+            self.activity["total"] = len(todo)
+            tagged = 0
+            for path, sure in todo:
+                if self._stop.is_set():
+                    break
+                try:
+                    if self._write_tags(path, {i: g["language"] for i, g in sure.items()}, sure) != "Nothing to change":
+                        tagged += 1
+                except (tagging.TagError, OSError) as e:
+                    logger.warning(f"Couldn't tag {path} from its suggestions: {e}")
+                self.activity["done"] += 1
+            stopped = " before Stop was pressed" if self._stop.is_set() else ""
+            logger.log("ACTION", f"Accept all: tagged {tagged} file(s) from suggestions at least {minimum}% sure{stopped}")
 
     def purge(self):
         count = swap.purge(self.store, config.recycle_days)
@@ -1118,22 +1155,35 @@ class Engine:
             self._notices_ready.notify_all()
 
     def _send_notices(self):
+        """Tell the apps in batches: wait until changes stop coming for a minute (or 5 minutes at most), then ask
+        each film or series to be rescanned once, however many of its files changed. A rescan reads every file of
+        a series, so one per episode tagged could swamp Sonarr and Bazarr."""
         while True:
             with self._notices_ready:
+                first = time.time()
+                while self._notices:
+                    count = len(self._notices)
+                    self._notices_ready.wait(self.notify_quiet)
+                    if len(self._notices) == count or time.time() - first >= NOTIFY_MOST_SECONDS:
+                        break
                 if not self._notices:
                     self._notifier = None
                     self._notices_ready.notify_all()
                     return
-                path = self._notices[0]
-            try:
-                self.notify_now(path)
-            except Exception as e:
-                logger.warning(f"Couldn't tell the other apps about {path}: {e}")
+                batch = list(self._notices)
+            done = set()
+            for path in batch:
+                try:
+                    self.notify_now(path, done)
+                except Exception as e:
+                    logger.warning(f"Couldn't tell the other apps about {path}: {e}")
             with self._notices_ready:
-                self._notices.remove(path)
+                for path in batch:
+                    self._notices.remove(path)
+                self._notices_ready.notify_all()
 
     def wait_for_notices(self, timeout=30):
-        """Until every app has been told about the changes so far (for tests and shutdown)."""
+        """Until every app has been told about the changes so far (for tests)."""
         with self._notices_ready:
             self._notices_ready.wait_for(lambda: not self._notices, timeout)
 
@@ -1144,7 +1194,10 @@ class Engine:
             self._unreachable[kind] = time.time() + 600
         return new
 
-    def notify_now(self, path):
+    def notify_now(self, path, done=None):
+        """Tell the apps about one changed file. done holds what's been asked already in this batch, so each film
+        or series is only rescanned once."""
+        done = set() if done is None else done
         found = {}
         for kind in ("radarr", "sonarr"):
             arr = self._service(kind)
@@ -1154,12 +1207,15 @@ class Engine:
                 hit = arr.find(path)
                 if hit:
                     found[kind] = hit[0]
+                    if (kind, hit[0]) in done:
+                        continue
+                    done.add((kind, hit[0]))
                     arr.rescan(path)
                     logger.info(f"Asked {arr.name} to rescan {hit[1]}")
             except ServiceError as e:
                 if self._down(kind, e):
                     logger.warning(f"Couldn't ask {arr.name} to rescan: {e}")
-        self._tell_bazarr(path, found)
+        self._tell_bazarr(path, found, done)
         jellyfin = self._service("jellyfin")
         if jellyfin and time.time() >= self._unreachable.get("jellyfin", 0):
             try:
@@ -1168,7 +1224,7 @@ class Engine:
                 if self._down("jellyfin", e):
                     logger.warning(f"Couldn't tell Jellyfin about the change: {e}")
 
-    def _tell_bazarr(self, path, found):
+    def _tell_bazarr(self, path, found, done=None):
         """Ask Bazarr to look at the film again and, if it's been left without subtitles in your languages,
         to search for some."""
         bazarr = self._service("bazarr")
@@ -1185,8 +1241,13 @@ class Engine:
                     logger.info(f"Bazarr doesn't know {path}, so it wasn't told about the change")
                     return
                 kind, item_id = located
-            bazarr.action(kind, item_id, "scan-disk")
-            if config.bazarr_search_missing and not self.has_wanted_subtitles(path):
+            done = set() if done is None else done
+            if ("bazarr", kind, item_id) not in done:
+                done.add(("bazarr", kind, item_id))
+                bazarr.action(kind, item_id, "scan-disk")
+            if (config.bazarr_search_missing and ("bazarr-search", kind, item_id) not in done
+                    and not self.has_wanted_subtitles(path)):
+                done.add(("bazarr-search", kind, item_id))
                 bazarr.action(kind, item_id, "search-missing")
                 logger.info(f"Asked Bazarr to look for subtitles for {os.path.basename(path)}")
         except ServiceError as e:

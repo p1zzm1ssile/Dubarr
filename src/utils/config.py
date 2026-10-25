@@ -146,6 +146,13 @@ FIELDS = [
       env_bool("STRIP_SUBTITLE_FILES", default=True), section="Languages",
       help="e.g. Film.fr.srt downloaded by Bazarr or Jellyfin. The language comes from the file name; files whose name "
            "doesn't say one are kept. Just a file delete, so it's done even while the film itself waits."),
+    F("mux_subtitle_files", "general", "Put subtitle files beside films into them", "bool",
+      env_bool("MUX_SUBTITLE_FILES", default=False), section="Languages",
+      help="Text subtitle files (SRT, ASS, VTT) beside a film, in a language you keep, are put into the film as a "
+           "track and the file goes to the recycle folder. The language comes from the file's name, or is read from "
+           "its text when the name doesn't say. A film that already has that language inside is left alone. It means "
+           "rewriting the whole film, so it waits while seeding like any change. Bazarr may download a file again if "
+           "it no longer sees it. Off by default."),
     F("prefer_text_files", "general", "Remove picture subtitles when a text file is beside the film", "bool",
       env_bool("PREFER_TEXT_FILES", default=False), section="Languages",
       help="If Film.en.srt sits beside the film, its English picture subtitles (PGS) aren't needed, and Jellyfin "
@@ -308,17 +315,20 @@ FIELDS = [
       env_int("AUTO_TAG_CONFIDENCE", default=0), section="In the background", min=0, max=100,
       help="0 is off: suggestions wait for you. 90 is a good start. Every automatic tag is listed in History. "
            "Guesses below this stay as suggestions, and Accept all on the Dashboard tags those above a level you pick."),
-    F("auto_tag_from", "detection", "Only tag automatically from (hour)", "int",
+    F("auto_tag_from", "detection", "Only work in the background from (hour)", "int",
       env_int("AUTO_TAG_FROM", default=0), section="In the background", min=0, max=23,
-      help="Automatic tagging only runs between these hours, e.g. 1 to 7 for overnight, and only while Dubarr "
-           "isn't doing anything else. The same hour in both means any time. Suggestions are still made at any time."),
+      help="Detecting and tagging in the background only happen between these hours, e.g. 1 to 7 for overnight, "
+           "and only while Dubarr isn't doing anything else. Whisper is heavy on a CPU, so this keeps it out of "
+           "the way. The same hour in both means any time."),
     F("auto_tag_until", "detection", "Until (hour)", "int",
       env_int("AUTO_TAG_UNTIL", default=0), section="In the background", min=0, max=23),
     F("trust_confidence", "detection", "Change files straight away when at least this sure (%)", "int",
       env_int("TRUST_CONFIDENCE", default=97), section="In the background", min=50, max=100,
-      help="A wrong tag could make Dubarr remove the wrong track. So a file tagged automatically or with Accept all "
-           "is listed under \"Tagged automatically\" and its tracks aren't removed until you press Looks right, or for "
-           "7 days. Guesses at least this sure skip the wait. 100 means always wait."),
+      help="A wrong tag could make Dubarr remove the wrong track. So when a file tagged automatically or with Accept "
+           "all has tracks to remove, it's listed under \"Tagged automatically\" and they aren't removed until you "
+           "press Looks right, or for 7 days. Guesses at least this sure skip the wait, so those files go straight to "
+           "Will be changed. Files with nothing to remove go to their usual list, such as Already clean. 100 means "
+           "always wait."),
 ]
 
 def with_scheme(url):

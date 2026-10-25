@@ -452,3 +452,33 @@ def test_reads_the_original_flag():
     info = parse("/m/f.mkv", {"streams": [{"index": 0, "codec_type": "audio", "codec_name": "aac",
                                            "tags": {"language": "jpn"}, "disposition": {"original": 1}}]})
     assert info.tracks[0].original
+
+
+def sidecar(lang, path=None, text=True, forced=False):
+    return {"path": path or f"/m/film.{lang}.srt", "language": lang, "format": "srt" if text else "sup",
+            "text": text, "forced": forced, "hearing_impaired": False, "size": 10}
+
+
+MUX = Rules(["eng"], ["eng", "fra"], mux_subtitle_files=True)
+
+
+def test_puts_subtitle_files_into_the_film_when_turned_on():
+    info = media(VIDEO, audio("eng"), sub("eng"))
+    info.external = [sidecar("eng"), sidecar("fra"), sidecar("eng", "/m/film.eng.forced.srt", forced=True),
+                     sidecar("deu"), sidecar("fra", "/m/film.fr.sup", text=False), sidecar("und", "/m/film.srt")]
+    p = decide(info, MUX)
+    # English is already inside; German goes as usual; pictures and unknown languages stay beside it
+    assert [f["path"] for f in p.add_files] == ["/m/film.fra.srt", "/m/film.eng.forced.srt"]
+    assert [f["path"] for f in p.remove_files] == ["/m/film.deu.srt"]
+    assert p.status == plans.CHANGE and p.rewrites
+    assert p.message == "Remove 1 German subtitle file. Put the French + English subtitle files beside it into the film"
+    assert decide(info, Rules(["eng"], ["eng", "fra"])).add_files == []  # off by default
+
+
+def test_only_putting_files_in_still_rewrites():
+    info = media(VIDEO, audio("eng"))
+    info.external = [sidecar("eng")]
+    p = decide(info, MUX)
+    assert p.status == plans.CHANGE and p.rewrites and not p.remove
+    assert p.message == "Put the English subtitle file beside it into the film"
+    assert decide(info, MUX, tracks=False).status == plans.CLEAN

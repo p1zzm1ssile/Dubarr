@@ -415,3 +415,45 @@ def test_remove_tracks_by_hand(library, engine):
     _, entries = engine.store.history(limit=10)
     assert sorted(e["message"] for e in entries) == ["Removed a subtitle file beside the film by hand",
                                                      "Removed by hand: English audio, English subtitles and 1 subtitle file"]
+
+
+ENGLISH_SRT = ("1\n00:00:00,500 --> 00:00:01,500\nWhere were you last night? I waited for hours.\n\n"
+               "2\n00:00:01,600 --> 00:00:02,500\nI'm sorry, the train was late and my phone died.\n")
+
+
+@pytest.mark.parametrize("ext", [".mkv", ".mp4"])
+def test_subtitle_files_put_into_the_film(library, engine, monkeypatch, ext):
+    monkeypatch.setattr(config, "mux_subtitle_files", True)
+    film = make_video(str(library / "Film" / f"Film{ext}"), audio=("eng",))
+    named = library / "Film" / "Film.en.srt"
+    named.write_text(ENGLISH_SRT)
+    unnamed = library / "Film" / "Film.srt"  # no language in the name: read from the text
+    unnamed.write_text(ENGLISH_SRT.replace("Where", "Who").encode("cp1252").decode("cp1252"), encoding="cp1252")
+    engine.scan()
+    row = engine.store.file(film)
+    assert row["status"] == plans.CHANGE
+    assert "Put the English subtitle file beside it into the film" in row["message"]
+    engine.apply("manual", force=True)
+    assert tracks(film, "subtitle") == ["eng"]  # one English track: the second file isn't needed
+    assert not named.exists()
+    assert unnamed.exists()
+    _, entries = engine.store.history()
+    assert any("Put the English subtitle file into the film" in e["message"] for e in entries)
+    assert engine.store.file(film)["status"] == plans.CLEAN
+
+
+def test_subtitle_files_left_beside_the_film_by_default(library, engine):
+    film = make_video(str(library / "Film" / "Film.mkv"), audio=("eng",))
+    (library / "Film" / "Film.en.srt").write_text(ENGLISH_SRT)
+    engine.scan()
+    assert engine.store.file(film)["status"] == plans.CLEAN
+
+
+def test_subtitle_file_language_read_from_its_text(library, engine, monkeypatch):
+    monkeypatch.setattr(config, "mux_subtitle_files", True)
+    film = make_video(str(library / "Café" / "Café.mkv"), audio=("eng",))
+    (library / "Café" / "Café.srt").write_bytes(ENGLISH_SRT.replace("hours", "hours at the café").encode("cp1252"))
+    engine.scan()
+    engine.apply("manual", force=True)
+    assert tracks(film, "subtitle") == ["eng"]
+    assert "café" in "\n".join(tagging.subtitle_lines(probe(film), 2))  # Windows-1252 read correctly

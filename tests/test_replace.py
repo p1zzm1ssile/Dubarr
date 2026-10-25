@@ -172,3 +172,13 @@ def test_a_file_they_have_as_missing_is_deleted_and_searched_for(arrs, library, 
     _, entries = engine.store.history()
     assert {e["state"] for e in entries} == {"done"}  # in Dubarr's recycle folder, so they can be restored
     assert not engine.not_replaced_paths()
+
+
+def test_a_series_is_rescanned_once_however_many_episodes_changed(arrs, tmp_path):
+    calls, _ = arrs
+    engine = Engine(Store(str(tmp_path / "db")))
+    for n in range(1, 6):
+        engine.notify(str(tmp_path / "tv" / "Show" / "Season 01" / f"Show S01E0{n}.mkv"))
+    engine.wait_for_notices()
+    rescans = [body for m, p, body in writes(calls, "sonarr") if p == "/command"]
+    assert rescans == [{"name": "RescanSeries", "seriesId": 7}]

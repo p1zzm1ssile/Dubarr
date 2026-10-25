@@ -66,6 +66,7 @@ class Rules:
     keep_original_audio: bool = False
     original_language: str = None  # for this file, from Radarr or Sonarr; None if they don't know
     bazarr_files: frozenset = None  # subtitle files Bazarr downloaded, to keep only those; None to not check
+    mux_subtitle_files: bool = False  # put subtitle files beside the film, in languages kept, into it
 
 
 def original_language(info: MediaInfo, rules: Rules):
@@ -88,11 +89,12 @@ class Plan:
     saved_bytes: int = 0                         # roughly how much smaller the file gets (0 if unknown)
     remove_files: list = field(default_factory=list)  # subtitle files beside the video to remove
     original_only: str = None                    # the original language, when it's the only audio kept
+    add_files: list = field(default_factory=list)  # subtitle files beside the video to put into it
 
     @property
     def rewrites(self):
-        """Whether tracks come out of the video itself, which means writing a new copy of it."""
-        return bool(self.remove)
+        """Whether tracks come out of or go into the video itself, which means writing a new copy of it."""
+        return bool(self.remove or self.add_files)
 
     @property
     def changes(self):
@@ -103,6 +105,7 @@ class Plan:
             "status": self.status, "message": self.message, "remove": self.remove,
             "keep": self.keep, "default_audio": self.default_audio, "saved_bytes": self.saved_bytes,
             "mark_forced": self.mark_forced, "remove_files": self.remove_files, "original_only": self.original_only,
+            "add_files": self.add_files,
         }
 
 
@@ -330,8 +333,21 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
             if f["path"] not in removing and posixpath.normpath(f["path"]) not in rules.bazarr_files:
                 remove_files.append({**f, "reason": NOT_FROM_BAZARR})
 
+    # Text subtitle files in a language you keep go into the film, unless it already has that language inside
+    add_files = []
+    if tracks and rules.mux_subtitle_files:
+        removing_files = {f["path"] for f in remove_files}
+        removed = {r["index"] for r in remove}
+        inside = {(t.language, t.forced) for t in subtitles if t.index not in removed}
+        for f in info.external:
+            if (f["path"] in removing_files or not f["text"] or f["language"] not in rules.subtitle_languages
+                    or (f["language"], f["forced"]) in inside):
+                continue
+            add_files.append(f)
+            inside.add((f["language"], f["forced"]))
+
     untagged_subs = [t for t in subtitles if t.language == UNDEFINED]
-    if not remove and not remove_files:
+    if not remove and not remove_files and not add_files:
         if untagged_subs:
             count = len(untagged_subs)
             return Plan(UNKNOWN_SUBTITLES,
@@ -346,7 +362,7 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
 
     removed = {r["index"] for r in remove}
     keep = [i for i in every if i not in removed]
-    if not remove:
+    if not remove and not add_files:
         message = "Remove " + _join(_files_text(remove_files))
         return Plan(CHANGE, message + (f". {original_only}" if original_only else ""),
                     keep=keep, remove_files=remove_files, original_only=original if original_only else None)
@@ -394,11 +410,15 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
         parts.append(f"{picture} picture subtitle track{'s' if picture > 1 else ''} (a text file replaces "
                      f"{'them' if picture > 1 else 'it'})")
     parts += _files_text(remove_files)
-    text = _join(parts)
+    sentences = ["Remove " + _join(parts)] if parts else []
+    if add_files:
+        n = len(add_files)
+        sentences.append(f"Put the {describe(_file_languages(add_files))} subtitle file{'s' if n > 1 else ''} "
+                         "beside it into the film")
     if unsure_note:
-        text += f". {unsure_note}"
+        sentences.append(unsure_note)
     if original_only:
-        text += f". {original_only}"
-    return Plan(CHANGE, "Remove " + text, remove=remove, keep=keep,
+        sentences.append(original_only)
+    return Plan(CHANGE, ". ".join(sentences), remove=remove, keep=keep,
                 default_audio=default_audio, mark_forced=mark_forced, saved_bytes=sum(r["size"] for r in remove),
-                remove_files=remove_files, original_only=original if original_only else None)
+                remove_files=remove_files, original_only=original if original_only else None, add_files=add_files)
