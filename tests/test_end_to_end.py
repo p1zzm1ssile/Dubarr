@@ -450,10 +450,56 @@ def test_subtitle_files_left_beside_the_film_by_default(library, engine):
 
 
 def test_subtitle_file_language_read_from_its_text(library, engine, monkeypatch):
+    """A language read from the text is a guess: the track goes in untagged, with it as the suggestion."""
     monkeypatch.setattr(config, "mux_subtitle_files", True)
+    monkeypatch.setattr(config, "auto_tag_confidence", 0)
     film = make_video(str(library / "Café" / "Café.mkv"), audio=("eng",))
     (library / "Café" / "Café.srt").write_bytes(ENGLISH_SRT.replace("hours", "hours at the café").encode("cp1252"))
     engine.scan()
     engine.apply("manual", force=True)
-    assert tracks(film, "subtitle") == ["eng"]
+    assert tracks(film, "subtitle") == ["und"]
     assert "café" in "\n".join(tagging.subtitle_lines(probe(film), 2))  # Windows-1252 read correctly
+    row = engine.store.file(film)
+    assert row["status"] == plans.UNKNOWN_SUBTITLES
+    assert {i: (g["language"], g["by"]) for i, g in engine.guesses(row).items()} == {2: ("eng", "Dubarr")}
+    _, entries = engine.store.history()
+    assert any("untagged, as its language is a guess" in e["message"] for e in entries)
+
+
+def test_a_guessed_subtitle_file_is_tagged_when_tag_automatically_allows(library, engine, monkeypatch):
+    monkeypatch.setattr(config, "mux_subtitle_files", True)
+    monkeypatch.setattr(config, "auto_tag_confidence", 50)
+    film = make_video(str(library / "Film" / "Film.mkv"), audio=("eng",))
+    (library / "Film" / "Film.srt").write_text(ENGLISH_SRT)
+    engine.scan()
+    engine.apply("manual", force=True)
+    assert tracks(film, "subtitle") == ["eng"]
+
+
+def test_subtitle_files_put_in_by_hand_from_any_list(library, engine, monkeypatch):
+    """With the setting off, or on a list such as Untagged audio, the button puts them in."""
+    monkeypatch.setattr(config, "mux_subtitle_files", False)
+    monkeypatch.setattr(config, "auto_tag_confidence", 0)
+    film = make_video(str(library / "Film" / "Film.mkv"), audio=("",))
+    named = library / "Film" / "Film.en.srt"
+    named.write_text(ENGLISH_SRT)
+    (library / "Film" / "Film.fr.srt").write_text(ENGLISH_SRT)  # French isn't kept, so it stays out
+    engine.scan()
+    row = engine.store.file(film)
+    assert row["status"] == plans.UNKNOWN_AUDIO
+    assert row["plan"]["can_add"] == [str(named)]
+    assert engine.add_subtitle_files(film) == "Put 1 subtitle file into the film"
+    assert tracks(film, "subtitle") == ["eng"] and not named.exists()
+    row = engine.store.file(film)
+    assert row["status"] == plans.UNKNOWN_AUDIO and not row["plan"]["can_add"]
+    assert engine.add_subtitle_files(film) == "No subtitle files to put in"
+
+
+def test_unnamed_subtitle_files_are_never_removed_for_their_guess(library, engine, monkeypatch):
+    monkeypatch.setattr(config, "strip_subtitle_files", True)
+    make_video(str(library / "Film" / "Film.mkv"), audio=("eng",))
+    unnamed = library / "Film" / "Film.srt"
+    unnamed.write_text("1\n00:00:00,500 --> 00:00:01,500\nOù étais-tu hier soir ? Je t'ai attendu pendant des heures.\n")
+    engine.scan()
+    engine.apply("manual", force=True)
+    assert unnamed.exists()

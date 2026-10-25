@@ -117,7 +117,8 @@ def _built_in(text: str) -> tuple:
 
 
 def file_language(path: str):
-    """The language of a subtitle file beside a film, read by the built-in detector. None unless it's sure."""
+    """(language, confidence) of a subtitle file beside a film, read by the built-in detector. None unless it's
+    sure."""
     try:
         with open(path, "rb") as f:
             raw = f.read(200_000)
@@ -138,7 +139,7 @@ def file_language(path: str):
     if len(words) < 20:
         return None
     code, confidence = _built_in(words)
-    return code if code in LANGUAGES and confidence >= CONFIDENT else None
+    return (code, confidence) if code in LANGUAGES and confidence >= CONFIDENT else None
 
 
 def _ollama(cfg, text: str) -> tuple:

@@ -326,6 +326,14 @@ class Handler(BaseHTTPRequestHandler):
                     status = NOT_BAZARR if data.get("status") == NOT_BAZARR else None
                     engine.background(engine.apply, "manual", paths, True, library=library, status=status)
                     return self.send(200, {"ok": True, "message": "Changing files"})
+                if path == "/api/add-subtitles":
+                    file = data.get("path", "")
+                    if not engine.library_for(file):
+                        raise ValueError("This file isn't in a library set up in Dubarr")
+                    busy = engine.busy()
+                    engine.background(engine.add_subtitle_files, file, wait=True)
+                    return self.send(200, {"ok": True, "message": "Putting the subtitle files in once the current job "
+                                           "is done" if busy else "Putting the subtitle files in"})
                 if path == "/api/replace":
                     paths = data.get("paths") or None
                     if paths is not None and (not isinstance(paths, list) or not all(isinstance(p, str) for p in paths)):
@@ -511,6 +519,8 @@ def files(query):
             "mark_forced": (r["plan"] or {}).get("mark_forced", []),
             "files": [with_source(f, sources) for f in info.get("external", [])],
             "remove_files": [f["path"] for f in (r["plan"] or {}).get("remove_files", [])],
+            "add_files": [f["path"] for f in (r["plan"] or {}).get("add_files", [])],
+            "can_add": (r["plan"] or {}).get("can_add", []),
             "not_replaced": engine.not_replaced(r["path"]) if r["status"] == plans.NO_AUDIO else None,
             "saving": engine.saving(r["path"]),
             "guesses": {i: {"language": g["language"], "name": name(g["language"]), "by": g["by"],

@@ -200,12 +200,16 @@ function trackChips(file) {
     });
   }).concat((file.files || []).map((f) => {
     const gone = (file.remove_files || []).includes(f.path);
+    const goesIn = (file.add_files || []).includes(f.path);
     const extra = [f.forced && "forced", f.hearing_impaired && "SDH"].filter(Boolean);
     const from = source(f);
+    // A file whose name doesn't say its language shows what its text looks like
+    const guess = f.language === "und" && f.guess ? ` (looks ${langName(f.guess)}, ${Math.round(f.guess_confidence * 100)}%)` : "";
     return el("span", {
       class: `track sub file${gone ? " removed" : ""}${f.from_bazarr ? " bazarr" : f.from_bazarr === false ? " not-bazarr" : ""}`,
-      title: [f.path.split("/").pop(), f.size ? bytes(f.size) : "", gone ? "will be removed" : "kept"].filter(Boolean).join(" · "),
-      text: `${langName(f.language)} subs · ${f.format.toUpperCase()} file${extra.length ? ` (${extra.join(", ")})` : ""}${from ? ` · ${from}` : ""}`,
+      title: [f.path.split("/").pop(), f.size ? bytes(f.size) : "",
+        gone ? "will be removed" : goesIn ? "goes into the film" : "kept"].filter(Boolean).join(" · "),
+      text: `${langName(f.language)} subs${guess} · ${f.format.toUpperCase()} file${extra.length ? ` (${extra.join(", ")})` : ""}${from ? ` · ${from}` : ""}`,
     });
   })));
 }
@@ -491,6 +495,14 @@ async function showDashboard(selected) {
         actions.push(b);
       }
       const suggested = Object.entries(f.guesses || {}).filter(([i]) => f.tracks.some((t) => String(t.index) === i && t.language === "und"));
+      if ((f.can_add || []).length && !f.ignored) {
+        const n = f.can_add.length;
+        const b = el("button", { type: "button", text: n > 1 ? "Put subtitle files in" : "Put subtitle file in",
+          title: "Put the subtitle file" + (n > 1 ? "s" : "") + " beside it into the film. One whose name doesn't say "
+            + "its language goes in untagged, with what Dubarr read as a suggestion. The file goes to the recycle folder" });
+        b.addEventListener("click", () => act("/api/add-subtitles", { path: f.path }, b));
+        actions.push(b);
+      }
       const saving = f.saving && !f.saving.startsWith("The tags weren't");
       if (suggested.length && !f.ignored && !saving) {
         const b = el("button", { type: "button", text: "Use suggestions",
