@@ -262,7 +262,7 @@ class Engine:
                      config.strip_commentary, config.one_audio_per_language, config.one_subtitle_per_language,
                      config.assume_unlabelled_is_full, config.strip_subtitle_files, config.prefer_text_files,
                      config.keep_original_audio, self.original_language(path) if path else None,
-                     self.bazarr_files(path) if path else None)
+                     self.bazarr_files(path) if path else None, config.mux_subtitle_files)
 
     def bazarr_files(self, path):
         """The subtitle files Bazarr downloaded, when Dubarr is to keep only those and Bazarr looks after this film
@@ -359,6 +359,13 @@ class Engine:
                 return ERROR, f"Couldn't read the file: {e}", None, None, st
         # Subtitle files come and go without the video changing, so they're always looked at afresh
         info.external = find_sidecars(path)
+        if config.mux_subtitle_files:
+            # A file whose name doesn't say its language is read, so it can go into the film tagged
+            for f in info.external:
+                if f["text"] and f["language"] == "und":
+                    found = detect.file_language(f["path"])
+                    if found:
+                        f["language"], f["detected"] = found, True
 
         rules = self.rules(library, path)
         plan = decide(info, rules)
@@ -367,7 +374,8 @@ class Engine:
             saving = estimated_saving(plan)
             minimum = config.min_saving_mb * 1024 * 1024
             waiting = None
-            if minimum and saving is not None and saving < minimum and not allow_small:
+            # Putting subtitle files into the film is something you turned on, so it isn't held back for its size
+            if minimum and saving is not None and saving < minimum and not allow_small and not plan.add_files:
                 status, waiting = TOO_SMALL, f"Saves less than the {size(minimum)} set, so it's left for now"
             elif st.st_nlink > 1 and not config.process_hardlinked:
                 status, waiting = SEEDING, "Waiting: the file is hardlinked, probably still seeding"
@@ -572,6 +580,11 @@ class Engine:
                                        root, config.recycle_days)
                 saved += info.size - new.size
                 logger.log("ACTION", f"{plan.message} from {path} (saved {size(info.size - new.size)}, change #{history_id})")
+            for f in plan.add_files:
+                message = f"Put the {name(f['language'])} subtitle file into the film"
+                history_id = swap.recycle_file(self.store, run_id, f["path"], path, message, root, config.recycle_days)
+                logger.log("ACTION", f"Put {f['path']} into the film and moved it to the recycle folder "
+                           f"(change #{history_id})")
             for f in plan.remove_files:
                 if f["reason"] == NOT_FROM_BAZARR:
                     message, why = "Removed a subtitle file beside the film that Bazarr didn't download", \

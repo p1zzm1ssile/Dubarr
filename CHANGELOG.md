@@ -2,6 +2,7 @@
 
 ## 0.8.6
 
+- **Put subtitle files into the film (optional).** A new setting in Settings > General, Put subtitle files beside films into them, off by default. Text subtitle files (SRT, ASS, VTT) beside a film, in a language you keep, go into the film as a track, and the file goes to the recycle folder so it can be restored from History. The language comes from the file's name, or is read from its text when the name doesn't say, and older Windows-1252 files are read correctly. A film that already has that language inside is left alone (#29).
 - **Accept all shows its progress.** It runs as one job, Accepting suggestions, with a count of files done and time left, instead of a string of separate Tagging jobs that read "0 file(s) so far". Stop stops it at the next file (#30).
 - **Where files tagged by Accept all go.** Only files with tracks to remove wait under Tagged automatically, and guesses at least as sure as the level in Settings > Language detection (97% unless changed) skip the wait. Files with nothing to remove go to their usual list, such as Already clean. The setting's help now says so (#30).
 - **Playing a sample keeps the suggestion.** Under Listen & tag, Play a 30s sample and Show some lines no longer clear Whisper's suggestion and its Use button (#31).

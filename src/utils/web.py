@@ -293,7 +293,7 @@ class Handler(BaseHTTPRequestHandler):
                 # New languages or libraries change what's wanted: re-check (quick, nothing is re-read)
                 if {"audio_languages", "subtitle_languages", "strip_audio", "strip_subtitles", "strip_commentary",
                         "one_audio_per_language", "one_subtitle_per_language", "assume_unlabelled_is_full",
-                        "min_saving_mb", "strip_subtitle_files", "prefer_text_files", "keep_original_audio", "original_only_tag",
+                        "min_saving_mb", "strip_subtitle_files", "prefer_text_files", "mux_subtitle_files", "keep_original_audio", "original_only_tag",
                         "libraries", "process_hardlinked"} & changes.keys():
                     engine.background(engine.scan, "settings", wait=True)
                 return self.send(200, {"ok": True, "values": config.public_values()})
