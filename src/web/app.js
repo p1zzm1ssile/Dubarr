@@ -587,8 +587,10 @@ async function showDashboard(selected) {
       activity.replaceChildren(
         el("div", { class: "toolbar", style: "margin:0" },
           el("strong", { text: `${a.task}…` }),
-          el("span", { class: "muted small", text: (a.total ? `${a.done.toLocaleString()} of ${a.total.toLocaleString()}` : a.detail === "Listing files" ? "listing files" : `${a.done} file(s) so far`)
-            + (a.total && pct !== null ? ` (${pct}%)` : "") + (a.done ? eta : "") }),
+          el("span", { class: "muted small", text: (a.total ? `${a.done.toLocaleString()} of ${a.total.toLocaleString()}`
+            : a.bytes_total ? `${bytes(a.bytes_done)} of ${bytes(a.bytes_total)}`
+            : a.detail === "Listing files" ? "listing files" : `${a.done} file(s) so far`)
+            + (pct !== null && (a.total || a.bytes_total) ? ` (${pct}%)` : "") + (a.done || a.bytes_done ? eta : "") }),
           el("span", { class: "spacer" }), stop, stopAll),
         pct !== null ? el("div", { class: "progress" }, el("span", { style: `width:${pct}%` })) : el("div", { class: "progress" }, el("span", { style: "width:100%;opacity:.35" })),
         el("div", { class: "muted small mono", style: "word-break:break-all", text: a.detail || "" }),

@@ -503,3 +503,27 @@ def test_unnamed_subtitle_files_are_never_removed_for_their_guess(library, engin
     engine.scan()
     engine.apply("manual", force=True)
     assert unnamed.exists()
+
+
+def test_progress_counts_the_copy_being_written(library, engine, monkeypatch):
+    """Removing tracks from one big film used to show "0 file(s) so far" until it was done."""
+    import core.engine as engine_module
+    film = make_video(str(library / "Film" / "Film.mkv"), audio=("eng", "fre"))
+    engine.scan()
+    real_remux = engine_module.remux
+    seen = []
+
+    def remux_watched(info, plan):
+        # Half of the copy written so far
+        with open(temp_path(info.path), "wb") as f:
+            f.write(b"\0" * ((info.size - plan.saved_bytes) // 2))
+        seen.append(engine.progress())
+        return real_remux(info, plan)
+
+    monkeypatch.setattr(engine_module, "remux", remux_watched)
+    engine.remove_by_hand(film, [2], [])
+    a = seen[0]
+    assert a["bytes_total"] > 0
+    assert 0.4 < a["bytes_done"] / a["bytes_total"] < 0.6
+    assert a["eta_seconds"] is not None
+    assert not engine._writing

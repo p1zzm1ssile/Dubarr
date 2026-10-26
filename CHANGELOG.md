@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.9
+
+- **Progress inside a big film.** Rewriting a film now counts the new copy as it's written, so the bar and the time left move during a 4K film instead of sitting at "0 file(s) so far" until it's done. Removing tracks by hand and Put subtitle file in show how many GB of the film are done, e.g. "31.2 GB of 58.4 GB (53%) · about 6 min left".
+
 ## 0.8.8
 
 - **A subtitle file's language read from its text is a suggestion.** When a subtitle file's name doesn't say its language, the track it becomes goes into the film untagged, so the film shows under Untagged subtitles with the language Dubarr read as a suggestion to confirm. It's only tagged straight away when Tag automatically (Settings > Language detection) is set at or below how sure Dubarr is (#29).

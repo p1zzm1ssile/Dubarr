@@ -15,7 +15,7 @@ from core import plan as plans
 from core import detect, swap, tagging
 from core.plan import NOT_FROM_BAZARR, Plan, Rules, _removal, decide, mergeable
 from core.probe import PROBE_VERSION, MediaInfo, ProbeError, find_sidecars, probe
-from core.remux import RemuxError, remux, supported
+from core.remux import RemuxError, remux, supported, temp_path
 from core.store import Store
 from services.connections import Arr, Bazarr, Jellyfin, ServiceError
 from utils.languages import name, normalise
@@ -152,6 +152,7 @@ class Engine:
         self._cancelled = 0     # goes up with each Stop all: every job waiting its turn before then is dropped
         self._waiting = []      # the jobs waiting their turn, by name, for the web UI
         self._saving = {}       # {path: how saving your tags is going}, shown in the file's row
+        self._writing = {}      # {copy being written: (its expected size, the original's size)}, for progress
         self._not_replaced = {}  # path: why Radarr or Sonarr couldn't replace it, shown on the No audio list
         self._auto_failed = set()  # (path, size, mtime) automatic tagging couldn't do: not tried again until it changes
         self.activity = None          # what's happening now, for the web UI
@@ -207,6 +208,7 @@ class Engine:
         if not a:
             return None
         a = dict(a)
+        a["bytes_done"] = min(a["bytes_total"], a["bytes_done"] + self._written()) if a["bytes_total"] else 0
         elapsed = time.time() - a["started"]
         eta = None
         if a["bytes_total"] and a["bytes_done"]:
@@ -217,6 +219,28 @@ class Engine:
         a["elapsed_seconds"] = round(elapsed)
         a["eta_seconds"] = round(eta) if eta is not None else None
         return a
+
+    def _remux(self, info, plan):
+        """remux(), with the copy's growth counted in the job's progress, so a big film doesn't sit at 0."""
+        target = temp_path(info.path)
+        a = self.activity
+        if a is not None and not a["bytes_total"]:
+            a["bytes_total"] = info.size  # one film by itself: its own size is the whole job
+        self._writing[target] = (max(1, info.size - (plan.saved_bytes or 0)), info.size)
+        try:
+            return remux(info, plan)
+        finally:
+            self._writing.pop(target, None)
+
+    def _written(self):
+        """How much of the originals the copies being written have got through, going by their size so far."""
+        total = 0
+        for target, (expected, original) in list(self._writing.items()):
+            try:
+                total += original * min(1.0, os.path.getsize(target) / expected)
+            except OSError:
+                pass
+        return int(total)
 
     def stop(self):
         """Stop the job after the current file, and drop automatic tagging waiting behind it, so it doesn't
@@ -593,7 +617,7 @@ class Engine:
         saved = 0
         try:
             if plan.rewrites:
-                new = remux(info, plan)
+                new = self._remux(info, plan)
                 history_id = swap.swap(self.store, run_id, path, info.size, new.size, plan.message, plan.remove,
                                        root, config.recycle_days)
                 saved += info.size - new.size
@@ -900,7 +924,7 @@ class Engine:
             saved = 0
             try:
                 if plan.rewrites:
-                    new = remux(info, plan)
+                    new = self._remux(info, plan)
                     history_id = swap.swap(self.store, run_id, path, info.size, new.size, plan.message, plan.remove,
                                            root, config.recycle_days)
                     saved += info.size - new.size
