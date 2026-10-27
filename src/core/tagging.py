@@ -78,8 +78,7 @@ def subtitle_lines(info: MediaInfo, index: int, limit: int = 12) -> list:
     """A few lines of dialogue from a text subtitle track."""
     track = _track(info, index, "subtitle")
     if track.codec not in TEXT_SUBTITLES:
-        raise TagError("This subtitle track is made of pictures (like Blu-ray PGS), so it can't be shown as text. "
-                       "Play the film with this track on to check it")
+        raise TagError("This subtitle track is made of pictures (like Blu-ray PGS), so it can't be shown as text")
     # Look from a quarter of the way in first, then from the start. Only part of the file is read.
     starts = [int(info.duration * 0.25), 0] if info.duration > 1200 else [0]
     for start in starts:
@@ -96,6 +95,68 @@ def subtitle_lines(info: MediaInfo, index: int, limit: int = 12) -> list:
         if lines:
             return lines
     raise TagError("No lines found in this subtitle track")
+
+
+def subtitle_times(info: MediaInfo, index: int, limit: int) -> list:
+    """(shown, hidden) seconds of some subtitles in a picture track, from a quarter of the way in if it's long.
+    Only the packets are read, from a stretch of the film, not the pictures or the video."""
+    starts = [int(info.duration * 0.25), 0] if info.duration > 1200 else [0]
+    for start in starts:
+        result = _run(["ffprobe", "-v", "error", "-select_streams", str(index), "-read_intervals", f"{start}%+900",
+                       "-show_entries", "packet=pts_time,size", "-of", "csv=p=0", info.path], timeout=120)
+        packets = []
+        for line in (result.stdout or "").splitlines():
+            try:
+                time_, size_ = line.split(",")[:2]
+                packets.append((float(time_), int(size_)))
+            except ValueError:
+                continue
+        times = []
+        # A picture is a big packet; the small one after it clears the screen
+        for n, (at, size_) in enumerate(packets):
+            if size_ > 100 and at >= start:
+                until = next((t for t, z in packets[n + 1:] if t > at), at + 2)
+                times.append((at, until))
+        if times:
+            step = max(1, len(times) // limit)
+            return times[::step][:limit]
+    return []
+
+
+def subtitle_stills(info: MediaInfo, index: int, limit: int = 4) -> list:
+    """Small JPEG stills of the film with some subtitles from a picture track drawn on, so they can be read."""
+    track = _track(info, index, "subtitle")
+    if track.codec in TEXT_SUBTITLES:
+        raise TagError("This subtitle track is text: show its lines instead")
+    if not info.of("video"):
+        raise TagError("This file has no video to show the subtitles on")
+    # The pictures are drawn for a screen of their own size (usually 1920x1080, also on a 4K film with the black
+    # bars cropped), so the film is fitted into that screen first, as a player does
+    sizes = _run(["ffprobe", "-v", "error", "-show_entries", "stream=index,width,height", "-of", "csv=p=0",
+                  info.path], timeout=60)
+    dims = {}
+    for line in (sizes.stdout or "").splitlines():
+        try:
+            i, w, h = (int(x) for x in line.split(",")[:3])
+            dims[i] = (w, h)
+        except ValueError:
+            continue
+    w, h = dims.get(index) or dims.get(info.of("video")[0].index) or (1920, 1080)
+    stills = []
+    for shown, hidden in subtitle_times(info, index, limit):
+        at = shown + min(0.5, (hidden - shown) / 2)
+        before = max(0.0, shown - 1)
+        # Seek to just before it, then decode a moment, so the subtitle has been read when the frame is taken
+        result = _run(["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{before:.3f}", "-i", info.path,
+                       "-filter_complex", f"[0:v:0]scale={w}:{h}:force_original_aspect_ratio=decrease,"
+                       f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2[v];[v][0:{index}]overlay,scale=640:-2", "-ss", f"{at - before:.3f}",
+                       "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "5", "-f", "image2", "pipe:1"],
+                      timeout=120, binary=True)
+        if result.returncode == 0 and result.stdout:
+            stills.append(result.stdout)
+    if not stills:
+        raise TagError("Couldn't find any subtitles to show in this track")
+    return stills
 
 
 def describe_changes(info: MediaInfo, changes: dict) -> str:

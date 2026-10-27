@@ -87,6 +87,9 @@ def find_sidecars(video_path: str) -> list:
         if base != stem and not base.startswith(stem + "."):
             continue
         parts = [p for p in base[len(stem):].split(".") if p]
+        # Film.forced.srt says it's forced but not its language ("hi" first is Hindi, though)
+        if parts and parts[0].lower() in ("forced", "sdh", "cc"):
+            parts = [""] + parts
         language = normalise(parts[0]) if parts else "und"
         flags = {SIDECAR_FLAGS.get(p.lower()) for p in parts[1:]}
         try:
@@ -97,6 +100,18 @@ def find_sidecars(video_path: str) -> list:
                       "text": ext in TEXT_SIDECARS, "forced": "forced" in flags, "hearing_impaired": "hi" in flags,
                       "size": size})
     return found
+
+
+def sidecar_name(video_path: str, file: dict, language: str) -> str:
+    """Where a subtitle file beside a video goes once its name says its language, keeping forced and SDH."""
+    from utils.languages import short_code
+    folder, name = os.path.split(video_path)
+    parts = [os.path.splitext(name)[0], short_code(language)]
+    if file.get("forced"):
+        parts.append("forced")
+    if file.get("hearing_impaired"):
+        parts.append("sdh")
+    return os.path.join(folder, ".".join(parts) + "." + file["format"])
 
 
 def _int(value):

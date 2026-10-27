@@ -108,6 +108,16 @@ for _code, (_name, _others) in LANGUAGES.items():
         _ALIASES[_alias.lower()] = _code
 
 
+def short_code(code: str) -> str:
+    """The code to put in a file name, two letters where there are some: Film.en.srt."""
+    entry = LANGUAGES.get(code)
+    if isinstance(entry, tuple):
+        two = [o for o in entry[1] if len(o) == 2 and o.isalpha()]
+        if two:
+            return two[0]
+    return code
+
+
 def normalise(value) -> str:
     """The language code for a track tag, setting or name. Unrecognised tags count as unknown."""
     value = (value or "").strip().lower()

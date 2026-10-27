@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0
+
+- **Subtitle files beside a film work like its tracks.** Under Listen & tag, each subtitle file has a language list, Detect (reads the file and suggests its language), Put in and Remove, next to the film's own tracks. A file can't hold a language tag, so choosing its language renames it to say so: Film.srt becomes Film.en.srt, keeping forced and SDH in the name. Use suggestions does the same with Dubarr's guess (#29).
+- **A subtitle file whose name doesn't say its language needs you.** Films with one now go under Untagged subtitles instead of Already clean, with what the file looks like as a suggestion, until it's named, put in or removed. Film.forced.srt now counts as forced with no language, instead of being ignored (#29).
+- **Put in any subtitle file.** Put in, in the panel, takes the file you pick, whatever list the film is on (Will be changed included), and even when the film already has a track in that language (#29).
+- **Suggestions survive a rewrite.** Changing a film or putting subtitles in used to drop the suggestions already made for its tracks, so untagged audio had to be detected again. They're now carried over to the new copy (#29).
+- **Blu-ray picture subtitles can be checked.** Show some lines on a picture subtitle track (PGS, VobSub) shows a few stills of the film with the subtitles on, so you can read them and choose the language. Detect isn't offered for these, as it would need text recognition.
+
+## 0.8.9
+
+- **Progress inside a big film.** Rewriting a film now counts the new copy as it's written, so the bar and the time left move during a 4K film instead of sitting at "0 file(s) so far" until it's done. Removing tracks by hand and Put subtitle file in show how many GB of the film are done, e.g. "31.2 GB of 58.4 GB (53%) · about 6 min left".
+
 ## 0.8.8
 
 - **A subtitle file's language read from its text is a suggestion.** When a subtitle file's name doesn't say its language, the track it becomes goes into the film untagged, so the film shows under Untagged subtitles with the language Dubarr read as a suggestion to confirm. It's only tagged straight away when Tag automatically (Settings > Language detection) is set at or below how sure Dubarr is (#29).

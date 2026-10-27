@@ -66,3 +66,38 @@ def quick_background(monkeypatch):
     import core.engine
     monkeypatch.setattr(core.engine, "NOTIFY_QUIET_SECONDS", 0.05)
     monkeypatch.setattr(core.engine, "DETECT_PAUSE_SECONDS", 0)
+
+
+def make_pgs_video(path, events=((1, 3), (4, 5.5))):
+    """A small film with a Blu-ray style picture subtitle track (PGS), each subtitle a white box."""
+    import struct
+
+    def segment(kind, pts, data):
+        return b"PG" + struct.pack(">IIBH", pts, pts, kind, len(data)) + data
+
+    w, h, bw, bh = 320, 180, 100, 20
+    x, y = (w - bw) // 2, h - bh - 10
+    sup = b""
+    for n, (start, end) in enumerate(events):
+        p, q = int(start * 90000), int(end * 90000)
+        sup += segment(0x16, p, struct.pack(">HHBHBBBB", w, h, 0x10, 2 * n, 0x80, 0, 0, 1) + struct.pack(">HBBHH", 0, 0, 0, x, y))
+        sup += segment(0x17, p, struct.pack(">BBHHHH", 1, 0, x, y, bw, bh))
+        sup += segment(0x14, p, struct.pack(">BB", 0, 0) + bytes([1, 235, 128, 128, 255]))
+        rle = (bytes([0x00, 0xC0 | (bw >> 8), bw & 0xFF, 1]) + b"\0\0") * bh
+        sup += segment(0x15, p, struct.pack(">HBB", 0, 0, 0xC0) + (len(rle) + 4).to_bytes(3, "big") + struct.pack(">HH", bw, bh) + rle)
+        sup += segment(0x80, p, b"")
+        sup += segment(0x16, q, struct.pack(">HHBHBBBB", w, h, 0x10, 2 * n + 1, 0, 0, 0, 0))
+        sup += segment(0x17, q, struct.pack(">BBHHHH", 1, 0, x, y, bw, bh))
+        sup += segment(0x80, q, b"")
+    folder = os.path.dirname(path)
+    os.makedirs(folder, exist_ok=True)
+    work = tempfile.mkdtemp(dir=folder, prefix=".work-")
+    base, subs = os.path.join(work, "base.mkv"), os.path.join(work, "s.sup")
+    with open(subs, "wb") as f:
+        f.write(sup)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc=size={2 * w}x{2 * h}:rate=24",
+                    "-f", "lavfi", "-i", "sine=f=300", "-t", "6", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-c:a", "aac", "-metadata:s:a:0", "language=eng", base], check=True)
+    subprocess.run(["mkvmerge", "-q", "-o", path, base, subs], check=True)
+    shutil.rmtree(work)
+    return path

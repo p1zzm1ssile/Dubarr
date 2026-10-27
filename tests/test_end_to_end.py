@@ -7,7 +7,7 @@ import time
 import pytest
 
 import utils.config as config
-from conftest import make_video, needs_tools
+from conftest import make_pgs_video, make_video, needs_tools
 from core import plan as plans
 from core import swap, tagging
 from core.engine import ERROR, SEEDING, Engine
@@ -439,7 +439,7 @@ def test_subtitle_files_put_into_the_film(library, engine, monkeypatch, ext):
     assert unnamed.exists()
     _, entries = engine.store.history()
     assert any("Put the English subtitle file into the film" in e["message"] for e in entries)
-    assert engine.store.file(film)["status"] == plans.CLEAN
+    assert engine.store.file(film)["status"] == plans.UNKNOWN_SUBTITLES  # the unnamed file left beside it
 
 
 def test_subtitle_files_left_beside_the_film_by_default(library, engine):
@@ -503,3 +503,77 @@ def test_unnamed_subtitle_files_are_never_removed_for_their_guess(library, engin
     engine.scan()
     engine.apply("manual", force=True)
     assert unnamed.exists()
+
+
+def test_progress_counts_the_copy_being_written(library, engine, monkeypatch):
+    """Removing tracks from one big film used to show "0 file(s) so far" until it was done."""
+    import core.engine as engine_module
+    film = make_video(str(library / "Film" / "Film.mkv"), audio=("eng", "fre"))
+    engine.scan()
+    real_remux = engine_module.remux
+    seen = []
+
+    def remux_watched(info, plan):
+        # Half of the copy written so far
+        with open(temp_path(info.path), "wb") as f:
+            f.write(b"\0" * ((info.size - plan.saved_bytes) // 2))
+        seen.append(engine.progress())
+        return real_remux(info, plan)
+
+    monkeypatch.setattr(engine_module, "remux", remux_watched)
+    engine.remove_by_hand(film, [2], [])
+    a = seen[0]
+    assert a["bytes_total"] > 0
+    assert 0.4 < a["bytes_done"] / a["bytes_total"] < 0.6
+    assert a["eta_seconds"] is not None
+    assert not engine._writing
+
+
+def test_picture_subtitles_show_as_stills(library, engine):
+    from core.tagging import subtitle_stills
+    film = make_pgs_video(str(library / "Film" / "Film.mkv"))
+    info = probe(film)
+    pgs = info.of("subtitle")[0]
+    assert pgs.codec == "hdmv_pgs_subtitle"
+    stills = subtitle_stills(info, pgs.index)
+    assert len(stills) == 2 and all(s[:2] == b"\xff\xd8" for s in stills)  # JPEGs
+    with pytest.raises(tagging.TagError, match="pictures"):
+        tagging.subtitle_lines(info, pgs.index)
+
+
+def test_naming_a_subtitle_file_settles_its_language(library, engine):
+    """An unnamed file keeps the film under Untagged subtitles until its language is chosen, which renames it."""
+    film = make_video(str(library / "Film" / "Film.mkv"), audio=("eng",))
+    unnamed = library / "Film" / "Film.srt"
+    unnamed.write_text(ENGLISH_SRT)
+    (library / "Film" / "Film.forced.srt").write_text(ENGLISH_SRT)  # "forced" isn't a language
+    engine.scan()
+    row = engine.store.file(film)
+    assert row["status"] == plans.UNKNOWN_SUBTITLES
+    assert "2 subtitle files beside it don't say their language" in row["message"]
+    guessed = {f["path"]: f.get("guess") for f in row["info"]["external"]}
+    assert guessed[str(unnamed)] == "eng"
+    with pytest.raises(tagging.TagError, match="isn't a subtitle file beside"):
+        engine.files_wanted(film, {str(library / "Other.srt"): "eng"})
+    engine.tag(film, {}, files={str(unnamed): "eng", str(library / "Film" / "Film.forced.srt"): "fra"})
+    assert sorted(os.listdir(library / "Film")) == ["Film.en.srt", "Film.fr.forced.srt", "Film.mkv"]
+    assert engine.store.file(film)["status"] == plans.CHANGE  # French isn't kept, so that file can go now
+    with pytest.raises(tagging.TagError, match="already a Film.en.srt"):
+        (library / "Film" / "Film.srt").write_text(ENGLISH_SRT)
+        engine.files_wanted(film, {str(library / "Film" / "Film.srt"): "eng"})
+
+
+def test_put_in_any_subtitle_file_you_choose_and_suggestions_survive(library, engine, monkeypatch):
+    """Put in from the panel takes the file you pick, even in a language the film has already. Suggestions for
+    the film's own tracks carry over to the new copy."""
+    monkeypatch.setattr(config, "auto_tag_confidence", 0)
+    film = make_video(str(library / "Film" / "Film.mkv"), audio=("", "eng"), subtitles=("eng",))
+    named = library / "Film" / "Film.en.srt"
+    named.write_text(ENGLISH_SRT)
+    engine.scan()
+    row = engine.store.file(film)
+    engine.store.save_guess(film, 1, row["size"], row["mtime"], "ita", 0.9, "Whisper")
+    assert engine.add_subtitle_files(film, files=[str(named)]) == "Put 1 subtitle file into the film"
+    assert tracks(film, "subtitle") == ["eng", "eng"] and not named.exists()
+    row = engine.store.file(film)
+    assert {i: g["language"] for i, g in engine.guesses(row).items()} == {1: "ita"}

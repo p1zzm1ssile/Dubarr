@@ -143,13 +143,14 @@ def subtitled(fake_bazarr, tmp_path, monkeypatch):
 def test_subtitles_bazarr_did_not_download_are_listed_and_removed_by_hand(subtitled, monkeypatch):
     engine, film, other = subtitled
     engine.scan()
-    assert engine.store.file(str(film / "Film.mkv"))["status"] == "clean"  # off by default
+    # Off by default, so only Film.srt, whose name doesn't say its language, needs you
+    assert engine.store.file(str(film / "Film.mkv"))["status"] == "unknown_subtitles"
     monkeypatch.setattr(config, "bazarr_other_subtitles", config.OTHER_SUBTITLES_LIST)
     engine.scan()
     row = engine.store.file(str(film / "Film.mkv"))
     assert row["status"] == NOT_BAZARR
     assert row["message"] == "Remove 2 subtitle files Bazarr didn't download"
-    assert engine.store.file(other)["status"] == "clean"  # Bazarr doesn't know it
+    assert engine.store.file(other)["status"] == "unknown_subtitles"  # Bazarr doesn't know it: Other.srt is unnamed
 
     # Not by themselves, even with Report only off
     monkeypatch.setattr(config, "report_only", False)
@@ -181,7 +182,7 @@ def test_nothing_is_removed_while_bazarrs_history_is_empty(subtitled, monkeypatc
     engine.scan()
     engine.tick()
     assert len(os.listdir(film)) == 4
-    assert engine.store.file(str(film / "Film.mkv"))["status"] == "clean"
+    assert engine.store.file(str(film / "Film.mkv"))["status"] == "unknown_subtitles"  # Film.srt is unnamed
 
 
 def test_where_subtitle_files_came_from(fake_bazarr):
