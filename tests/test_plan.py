@@ -306,7 +306,8 @@ def test_unwanted_subtitle_files_are_removed():
     assert p.status == plans.CHANGE and not p.rewrites
     assert [f["language"] for f in p.remove_files] == ["fra", "deu"]
     assert p.message == "Remove 2 French + German subtitle files"
-    assert decide(info, Rules(["eng"], ["eng"], strip_subtitle_files=False)).status == plans.CLEAN
+    # Kept, but the file whose name doesn't say its language waits for you to say it
+    assert decide(info, Rules(["eng"], ["eng"], strip_subtitle_files=False)).status == plans.UNKNOWN_SUBTITLES
 
 
 def test_files_and_tracks_together():

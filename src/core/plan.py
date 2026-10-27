@@ -358,12 +358,23 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
         add_files = mergeable(info, rules, skip=removing_files, removed=removed)
 
     untagged_subs = [t for t in subtitles if t.language == UNDEFINED]
+    # A subtitle file whose name doesn't say its language is untagged too: naming it settles it
+    handled = {f["path"] for f in remove_files + add_files}
+    unnamed = [f for f in info.external if f["language"] == UNDEFINED and f["path"] not in handled]
     if not remove and not remove_files and not add_files:
-        if untagged_subs:
-            count = len(untagged_subs)
+        if untagged_subs or unnamed:
+            said = []
+            if untagged_subs:
+                count = len(untagged_subs)
+                said.append(f"{count} subtitle track{'s have' if count > 1 else ' has'} no language tag")
+            if unnamed:
+                count = len(unnamed)
+                said.append(f"{count} subtitle file{'s' if count > 1 else ''} beside it "
+                            f"{'don' if count > 1 else 'doesn'}'t say {'their' if count > 1 else 'its'} language in the name")
+            count = len(untagged_subs) + len(unnamed)
             return Plan(UNKNOWN_SUBTITLES,
-                        f"{count} subtitle track{'s have' if count > 1 else ' has'} no language tag. Tag "
-                        f"{'them' if count > 1 else 'it'} so Dubarr knows whether to keep {'them' if count > 1 else 'it'}",
+                        f"{_join(said)}. Choose {'their languages' if count > 1 else 'its language'} so Dubarr knows "
+                        f"whether to keep {'them' if count > 1 else 'it'}",
                         keep=every)
         if unsure_note:
             return Plan(UNKNOWN_ORIGINAL, unsure_note, keep=every)

@@ -139,7 +139,7 @@ const STATUS_HELP = {
   seeding: "Hardlinked files, usually still seeding in your torrent client. Dubarr waits until seeding stops, so the film isn't stored twice.",
   no_wanted_audio: "None of the audio is in a language you keep, so Dubarr leaves these alone. Replace them in Radarr or Sonarr if you want them in your language.",
   unknown_audio: "At least one audio track has no language tag, so Dubarr can't tell what it is and leaves the file alone. Press Listen & tag to hear it and set its language; the tag is written into the file, so it won't come back here.",
-  unknown_subtitles: "Nothing to remove, but a subtitle track has no language tag. Press Listen & tag to read a few lines and set its language, so Dubarr knows whether to keep it.",
+  unknown_subtitles: "Nothing to remove, but a subtitle track has no language tag, or a subtitle file beside the film doesn't say its language in its name. Press Listen & tag to read a few lines (or see stills, for Blu-ray picture subtitles) and choose the language, so Dubarr knows whether to keep it. A file is renamed to say it, e.g. Film.en.srt.",
   auto_tagged: "Tagged from a detected language, which could be wrong, so Dubarr hasn't removed any tracks yet. Press Check tracks to listen, then Looks right to let Dubarr change the file as usual.",
   unknown_original: "Nothing else to remove, but there's audio in another language that might be the original, and Always keep the original language audio is on. Connect Radarr or Sonarr so Dubarr knows the original language.",
   original_only: "None of your languages, but the audio in the original language is kept, e.g. Japanese-only anime. Nothing to do, unless you'd rather find a dubbed copy in Radarr or Sonarr.",
@@ -237,8 +237,12 @@ function suggestion(g, select) {
 
 // Ask Whisper, Ollama or the built-in detector for a track's language, and offer it as a suggestion.
 // Asking again listens to parts of the film it hasn't heard yet, in case music fooled it.
+const TEXT_CODECS = ["subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "text", "tx3g"];
+
 function detectButton(file, t, preview, select) {
   if (!(t.type === "audio" ? detection.audio : detection.subtitles)) return null;
+  // Picture subtitles (Blu-ray PGS) have no text to read: show their stills and choose by eye
+  if (t.type === "subtitle" && !TEXT_CODECS.includes(t.codec)) return null;
   const button = el("button", { type: "button", text: "Detect", title: t.type === "audio"
     ? "Whisper listens to a sample and suggests the language" : "Reads some lines and suggests the language" });
   let start = 0;
@@ -290,13 +294,16 @@ function tagPanel(file, onSaved) {
         button.textContent = "Try another part";
       });
     } else {
-      button = el("button", { type: "button", text: "Show some lines" });
+      button = el("button", { type: "button", text: "Show some lines", title: "Read a few lines. Picture subtitles, like Blu-ray PGS, show as stills of the film with them on" });
       button.addEventListener("click", async () => {
         button.disabled = true;
         preview.replaceChildren(el("div", { class: "muted small", text: "Reading…" }));
         try {
-          const { lines } = await api(`/api/subtitle-lines?${query(t)}`);
-          preview.replaceChildren(el("ul", { class: "sub-lines" }, lines.map((l) => el("li", { text: l }))));
+          const { lines, stills } = await api(`/api/subtitle-lines?${query(t)}`);
+          // Picture subtitles (Blu-ray PGS) come back as stills of the film with them drawn on
+          preview.replaceChildren(stills
+            ? el("div", { class: "sub-stills" }, stills.map((src) => el("img", { src, alt: "A frame of the film with this track's subtitles on", loading: "lazy" })))
+            : el("ul", { class: "sub-lines" }, lines.map((l) => el("li", { text: l }))));
         } catch (e) {
           preview.replaceChildren(el("div", { class: "error-text", text: e.message }));
         } finally {
@@ -321,15 +328,53 @@ function tagPanel(file, onSaved) {
       suggested, preview);
   });
 
+  // Subtitle files beside the film: like tracks, but the language lives in the name (Film.en.srt), so saving
+  // a language renames the file
+  const fileSelects = {};
   const fileRows = (file.files || []).map((f) => {
     removeFile[f.path] = el("input", { type: "checkbox", "aria-label": `Remove ${f.path.split("/").pop()}` });
+    fileSelects[f.path] = languageSelect(f.language);
     const from = source(f);
-    return el("div", { class: "tag-track" },
+    const suggested = el("div", { class: "tag-preview" });
+    const g = f.language === "und" && f.guess ? { language: f.guess, name: langName(f.guess), by: "Dubarr",
+      confidence: f.guess_confidence, sure: true } : null;
+    if (g) suggested.replaceChildren(suggestion(g, () => fileSelects[f.path]));
+    const controls = [];
+    if (f.text) {
+      const detect = el("button", { type: "button", text: "Detect", title: "Reads the file and suggests its language" });
+      detect.addEventListener("click", async () => {
+        detect.disabled = true;
+        suggested.replaceChildren(el("div", { class: "muted small", text: "Reading…" }));
+        try {
+          suggested.replaceChildren(suggestion(await post("/api/detect-file", { path: file.path, file: f.path }), () => fileSelects[f.path]));
+        } catch (e) {
+          suggested.replaceChildren(el("div", { class: "error-text", text: e.message }));
+        } finally {
+          detect.disabled = false;
+        }
+      });
+      const putIn = el("button", { type: "button", text: "Put in",
+        title: "Put this file into the film as a subtitle track. A language that's only a guess goes in untagged, with the guess as a suggestion. The file goes to the recycle folder" });
+      putIn.addEventListener("click", async () => {
+        putIn.disabled = true;
+        try {
+          flash(result, true, (await post("/api/add-subtitles", { path: file.path, files: [f.path] })).message);
+          setTimeout(onSaved, 1500);
+        } catch (e) {
+          flash(result, false, e.message);
+          putIn.disabled = false;
+        }
+      });
+      controls.push(detect, putIn);
+    }
+    return el("div", { class: `tag-track${f.language === "und" ? " untagged" : ""}` },
       el("div", { class: "tag-head" },
         el("div", {}, el("strong", { text: `Subtitle file · ${f.path.split("/").pop()}` }),
-          el("div", { class: "small muted" }, `${langName(f.language)} · ${f.format.toUpperCase()}${f.size ? ` · ${bytes(f.size)}` : ""}`,
+          el("div", { class: "small muted" }, `${f.language === "und" ? "No language in its name" : langName(f.language)} · ${f.format.toUpperCase()}${f.size ? ` · ${bytes(f.size)}` : ""}`,
             from ? el("span", { class: `badge ${f.from_bazarr ? "ok" : "warn"}`, text: from }) : null)),
-        el("div", { class: "tag-controls" }, el("label", { class: "remove-pick" }, removeFile[f.path], "Remove"))));
+        el("div", { class: "tag-controls" }, ...controls, fileSelects[f.path],
+          el("label", { class: "remove-pick" }, removeFile[f.path], "Remove"))),
+      suggested);
   });
 
   const remove = el("button", { type: "button", class: "danger", text: "Remove ticked" });
@@ -358,12 +403,17 @@ function tagPanel(file, onSaved) {
       const value = selects[t.index].value;
       if (value !== t.language && value !== "und") tags[t.index] = value;
     }
-    if (!Object.keys(tags).length) { flash(result, false, "Choose a language for at least one track first"); return; }
+    const files = {};
+    for (const f of file.files || []) {
+      const value = fileSelects[f.path].value;
+      if (value !== f.language && value !== "und") files[f.path] = value;
+    }
+    if (!Object.keys(tags).length && !Object.keys(files).length) { flash(result, false, "Choose a language for at least one track or file first"); return; }
     save.disabled = true;
     result.className = "result muted";
     result.textContent = "Saving…";
     try {
-      const r = await post("/api/tag", { path: file.path, tags });
+      const r = await post("/api/tag", { path: file.path, tags, files });
       flash(result, true, r.message);
       setTimeout(onSaved, 1200);
     } catch (e) {
@@ -376,7 +426,8 @@ function tagPanel(file, onSaved) {
   return el("div", { class: "tag-panel" },
     el("p", { class: "small muted", text: "Listen to each track or read a few lines, choose its language, and save. "
       + "Or tick Remove on the tracks and subtitle files you don't want, and press Remove ticked. "
-      + "The tag is written into the file in a moment, without copying it, so the file won't be flagged again." }),
+      + "The tag is written into the file in a moment, without copying it, so the file won't be flagged again. "
+      + "A subtitle file beside the film can't hold a tag, so its name says the language instead: Film.srt becomes Film.en.srt." }),
     rows,
     fileRows,
     el("div", { class: "card-actions" }, save, remove, result));
@@ -504,10 +555,13 @@ async function showDashboard(selected) {
         actions.push(b);
       }
       const saving = f.saving && !f.saving.startsWith("The tags weren't");
-      if (suggested.length && !f.ignored && !saving) {
+      const guessedFiles = (f.files || []).filter((x) => x.language === "und" && x.guess);
+      if ((suggested.length || guessedFiles.length) && !f.ignored && !saving) {
         const b = el("button", { type: "button", text: "Use suggestions",
-          title: suggested.map(([i, g]) => `Track ${i}: ${g.name} (${Math.round(g.confidence * 100)}%)`).join(", ") });
-        b.addEventListener("click", () => act("/api/tag", { path: f.path, tags: Object.fromEntries(suggested.map(([i, g]) => [i, g.language])) }, b,
+          title: suggested.map(([i, g]) => `Track ${i}: ${g.name} (${Math.round(g.confidence * 100)}%)`)
+            .concat(guessedFiles.map((x) => `${x.path.split("/").pop()}: ${langName(x.guess)} (${Math.round(x.guess_confidence * 100)}%)`)).join(", ") });
+        b.addEventListener("click", () => act("/api/tag", { path: f.path, tags: Object.fromEntries(suggested.map(([i, g]) => [i, g.language])),
+          files: Object.fromEntries(guessedFiles.map((x) => [x.path, x.guess])) }, b,
           () => { b.hidden = true; savingNote.textContent = "Saving the tags"; savingNote.hidden = false; }));
         actions.push(b);
       }
@@ -533,10 +587,10 @@ async function showDashboard(selected) {
           el("div", { class: "small", text: f.message + (f.saved_bytes ? ` · saves ${bytes(f.saved_bytes)}` : "") }),
           f.not_replaced ? el("div", { class: "small suggested", text: `Not replaced: ${f.not_replaced}` }) : null,
           savingNote,
-          suggested.length ? el("div", { class: "small suggested", text: "Suggested: " + suggested.map(([i, g]) => {
+          suggested.length || guessedFiles.length ? el("div", { class: "small suggested", text: "Suggested: " + suggested.map(([i, g]) => {
             const t = f.tracks.find((x) => String(x.index) === i);
             return `${t.type === "audio" ? "audio" : "subtitles"} track ${i} ${g.name} (${Math.round(g.confidence * 100)}%, ${g.by})`;
-          }).join(", ") }) : null,
+          }).concat(guessedFiles.map((x) => `subtitle file ${x.path.split("/").pop()} ${langName(x.guess)} (${Math.round(x.guess_confidence * 100)}%)`)).join(", ") }) : null,
           f.tracks.length || (f.files || []).length ? trackChips(f) : null,
           panel),
         el("td", { class: "actions" }, el("div", { class: "action-stack" }, actions)));

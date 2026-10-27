@@ -1,5 +1,6 @@
 """The Dubarr web UI and its JSON API."""
 
+import base64
 import glob
 import hmac
 import io
@@ -20,8 +21,9 @@ import utils.status as status
 from core import plan as plans
 from core.engine import AUTO_TAGGED, ERROR, NOT_BAZARR, SEEDING, TOO_SMALL, Busy, in_window
 from core import detect as detection
+from core.probe import find_sidecars
 from core.swap import SwapError
-from core.tagging import TagError, audio_sample, subtitle_lines
+from core.tagging import TEXT_SUBTITLES, TagError, audio_sample, subtitle_lines, subtitle_stills
 from services.connections import Arr, Bazarr, Jellyfin, ServiceError, webhook_paths
 from utils.languages import LANGUAGES, name, normalise
 from utils.logger import logger
@@ -202,7 +204,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, sample, "audio/mpeg")
             if path == "/api/subtitle-lines":
                 info = engine.known_file(query.get("path", ""))
-                return self.send(200, {"lines": subtitle_lines(info, int(query.get("index", -1)))})
+                index = int(query.get("index", -1))
+                track = next((t for t in info.tracks if t.index == index and t.type == "subtitle"), None)
+                if track and track.codec not in TEXT_SUBTITLES:
+                    # Pictures, like Blu-ray PGS: stills of the film with the subtitles on
+                    stills = subtitle_stills(info, index)
+                    return self.send(200, {"stills": ["data:image/jpeg;base64," + base64.b64encode(s).decode()
+                                                      for s in stills]})
+                return self.send(200, {"lines": subtitle_lines(info, index)})
             if path == "/api/logs":
                 return self.send(200, read_logs(query.get("filter", "all")))
             if path == "/api/logs/download":
@@ -330,8 +339,11 @@ class Handler(BaseHTTPRequestHandler):
                     file = data.get("path", "")
                     if not engine.library_for(file):
                         raise ValueError("This file isn't in a library set up in Dubarr")
+                    chosen = data.get("files") or None
+                    if chosen is not None and (not isinstance(chosen, list) or not all(isinstance(p, str) for p in chosen)):
+                        raise ValueError("files must be a list")
                     busy = engine.busy()
-                    engine.background(engine.add_subtitle_files, file, wait=True)
+                    engine.background(engine.add_subtitle_files, file, chosen, wait=True)
                     return self.send(200, {"ok": True, "message": "Putting the subtitle files in once the current job "
                                            "is done" if busy else "Putting the subtitle files in"})
                 if path == "/api/replace":
@@ -385,12 +397,17 @@ class Handler(BaseHTTPRequestHandler):
                     tags = data.get("tags") or {}
                     if not isinstance(tags, dict):
                         raise ValueError("tags must be an object")
+                    files = data.get("files") or {}
+                    if not isinstance(files, dict):
+                        raise ValueError("files must be an object")
                     file = data.get("path", "")
                     # Checked now, so a mistake shows straight away; written in turn, so you can go on to the next film
-                    if not engine.tags_wanted(file, tags):
+                    tags = engine.tags_wanted(file, tags) if tags else {}
+                    files = engine.files_wanted(file, files)
+                    if not tags and not files:
                         return self.send(200, {"ok": True, "message": "Nothing to change"})
                     busy = engine.busy()
-                    engine.save_tags(file, tags)
+                    engine.save_tags(file, tags, files)
                     return self.send(200, {"ok": True, "message": "Saving once the current job is done" if busy
                                            else "Saved"})
                 if path == "/api/accept":
@@ -431,6 +448,17 @@ class Handler(BaseHTTPRequestHandler):
                     except (TypeError, ValueError):
                         start = 0
                     return self.send(200, detection.detect(info, index, start=start))
+                if path == "/api/detect-file":
+                    # A subtitle file beside the film, read by the built-in detector
+                    file, video = data.get("file", ""), data.get("path", "")
+                    if file not in [f["path"] for f in find_sidecars(video)] or not engine.library_for(video):
+                        raise ValueError("That isn't a subtitle file beside a film in your libraries")
+                    found = detection.file_language(file)
+                    if not found:
+                        raise ValueError("Couldn't tell its language from the text")
+                    code, confidence = found
+                    return self.send(200, {"language": code, "name": name(code), "confidence": round(confidence, 2),
+                                           "by": "Dubarr", "sure": confidence >= detection.CONFIDENT})
                 if path == "/api/ignore":
                     engine.store.set_ignored(data.get("path", ""), bool(data.get("ignored")))
                     return self.send(200, {"ok": True})

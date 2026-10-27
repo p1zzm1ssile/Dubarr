@@ -14,11 +14,11 @@ import utils.config as config
 from core import plan as plans
 from core import detect, swap, tagging
 from core.plan import NOT_FROM_BAZARR, Plan, Rules, _removal, decide, mergeable
-from core.probe import PROBE_VERSION, MediaInfo, ProbeError, find_sidecars, probe
+from core.probe import PROBE_VERSION, MediaInfo, ProbeError, find_sidecars, probe, sidecar_name
 from core.remux import RemuxError, remux, supported, temp_path
 from core.store import Store
 from services.connections import Arr, Bazarr, Jellyfin, ServiceError
-from utils.languages import name, normalise
+from utils.languages import LANGUAGES, name, normalise
 from utils.logger import logger
 from utils.paths import inside
 
@@ -153,6 +153,7 @@ class Engine:
         self._waiting = []      # the jobs waiting their turn, by name, for the web UI
         self._saving = {}       # {path: how saving your tags is going}, shown in the file's row
         self._writing = {}      # {copy being written: (its expected size, the original's size)}, for progress
+        self._carry = {}        # {path: {new track index: guess}} kept across a rewrite, saved once it's read again
         self._not_replaced = {}  # path: why Radarr or Sonarr couldn't replace it, shown on the No audio list
         self._auto_failed = set()  # (path, size, mtime) automatic tagging couldn't do: not tried again until it changes
         self.activity = None          # what's happening now, for the web UI
@@ -228,9 +229,31 @@ class Engine:
             a["bytes_total"] = info.size  # one film by itself: its own size is the whole job
         self._writing[target] = (max(1, info.size - (plan.saved_bytes or 0)), info.size)
         try:
-            return remux(info, plan)
+            new = remux(info, plan)
         finally:
             self._writing.pop(target, None)
+        self._carry_guesses(info, plan, new)
+        return new
+
+    def _carry_guesses(self, info, plan, new):
+        """Suggestions for tracks that stay keep going in the new copy, so a rewrite doesn't lose them.
+        Tracks keep their order within each kind (audio, subtitles), whatever their numbers become."""
+        row = self.store.file(info.path)
+        if not row:
+            return
+        old = self.guesses(row)
+        if not old:
+            return
+        kept = set(plan.keep)
+        carried = {}
+        for kind in ("audio", "subtitle"):
+            before = [t.index for t in info.of(kind) if t.index in kept]
+            after = [t.index for t in new.of(kind)]
+            for was, now in zip(before, after):
+                if was in old:
+                    carried[now] = old[was]
+        if carried:
+            self._carry[info.path] = carried
 
     def _written(self):
         """How much of the originals the copies being written have got through, going by their size so far."""
@@ -450,6 +473,11 @@ class Engine:
         self.store.save_file(path, library["path"], st.st_size, st.st_mtime, st.st_nlink,
                              info.to_dict() if info else None, status, message,
                              plan.to_dict() if plan else None, plan.saved_bytes if plan else 0)
+        carried = self._carry.pop(path, None)
+        if carried and info:
+            for index, g in carried.items():
+                if any(t.index == index and t.language == "und" for t in info.tracks):
+                    self.store.save_guess(path, index, st.st_size, st.st_mtime, g["language"], g["confidence"], g["by"])
         if plan and plan.original_only:
             self.tag_original_only(path)
         return status
@@ -642,6 +670,7 @@ class Engine:
                 saved += f["size"]
                 logger.log("ACTION", f"Removed {f['path']} ({why}, change #{history_id})")
         except (RemuxError, swap.SwapError, OSError) as e:
+            self._carry.pop(path, None)
             reason = getattr(e, "strerror", None) or str(e)
             logger.error(f"Couldn't change {path}: {reason}. The original is untouched")
             st = os.stat(path)
@@ -656,18 +685,19 @@ class Engine:
 
     def _suggest_added(self, path, plan):
         """Subtitle files put in untagged come last in the film: their guesses become its suggestions."""
-        guessed = [f for f in plan.add_files if f.get("tag") == "und"]
+        guessed = [f for f in plan.add_files if f.get("tag") == "und" and f.get("guessed")]
         row = self.store.file(path) if guessed else None
         if not row or not row["info"]:
             return
         subtitles = [t for t in row["info"]["tracks"] if t["type"] == "subtitle"][-len(plan.add_files):]
         for t, f in zip(subtitles, plan.add_files):
-            if f.get("tag") == "und" and t["language"] == "und":
+            if f.get("tag") == "und" and f.get("guessed") and t["language"] == "und":
                 self.store.save_guess(path, t["index"], row["size"], row["mtime"], f["language"],
                                       f.get("guess_confidence", 0), "Dubarr")
 
-    def add_subtitle_files(self, path, wait=False):
-        """Put the subtitle files beside a film into it, whichever list it's on. Returns what was done."""
+    def add_subtitle_files(self, path, files=None, wait=False):
+        """Put the subtitle files beside a film into it, whichever list it's on. Returns what was done.
+        files, a list of their paths, puts in just those, whatever their language and whatever is inside already."""
         with self.job("Putting subtitle files in", wait=wait):
             self.activity["detail"] = path
             library = self.library_for(path)
@@ -679,7 +709,12 @@ class Engine:
             if st.st_nlink > 1 and not config.process_hardlinked:
                 raise tagging.TagError("The file is hardlinked, probably still seeding. Putting subtitles in would "
                                        "change the torrent's data too. Try again once seeding stops")
-            files = mergeable(info, self.rules(library, path))
+            if files:
+                files = [{**f, "language": f["language"] if f["language"] != "und" else f.get("guess", "und"),
+                          "guessed": f["language"] == "und" and bool(f.get("guess"))}
+                         for f in info.external if f["path"] in files and f["text"]]
+            else:
+                files = mergeable(info, self.rules(library, path))
             if not files:
                 self.check_file(library, path)
                 return "No subtitle files to put in"
@@ -937,6 +972,7 @@ class Engine:
                     saved += f["size"]
                     logger.log("ACTION", f"Removed {f['path']} by hand (change #{history_id})")
             except (RemuxError, swap.SwapError, OSError) as e:
+                self._carry.pop(path, None)
                 logger.error(f"Couldn't remove tracks from {path}: {getattr(e, 'strerror', None) or e}. "
                              "The original is untouched")
                 self.store.finish_run(run_id, 0, 1, 0)
@@ -1020,14 +1056,45 @@ class Engine:
                 wanted[index] = code
         return wanted
 
-    def save_tags(self, path, changes):
-        """Your tags for a file, written in turn so you can go on to the next one. saving() says how it's going."""
-        self._saving[path] = "Waiting to save the tags" if self.busy() else "Saving the tags"
-        self.background(self._save_tags, path, changes, wait=True)
+    def files_wanted(self, path, files):
+        """Check languages chosen for subtitle files beside a film, e.g. {"/movies/Film/Film.srt": "eng"}. Returns
+        {file: code} of the ones that change. Raises TagError if one can't be done."""
+        if not self.library_for(path):
+            raise tagging.TagError("This file isn't in a library set up in Dubarr")
+        beside = {f["path"]: f for f in find_sidecars(path)}
+        wanted = {}
+        for file, code in (files or {}).items():
+            f = beside.get(file)
+            if not f:
+                raise tagging.TagError(f"{os.path.basename(file)} isn't a subtitle file beside this film")
+            if code not in LANGUAGES:
+                raise tagging.TagError(f"{code} isn't a language Dubarr knows")
+            if f["language"] == code:
+                continue
+            target = sidecar_name(path, f, code)
+            if os.path.exists(target) and target != file:
+                raise tagging.TagError(f"There's already a {os.path.basename(target)} beside the film")
+            wanted[file] = code
+        return wanted
 
-    def _save_tags(self, path, changes, wait=True):
+    def _name_files(self, path, files):
+        """A subtitle file can't hold a language tag, so its name carries it: Film.srt becomes Film.en.srt."""
+        beside = {f["path"]: f for f in find_sidecars(path)}
+        for file, code in self.files_wanted(path, files).items():
+            target = sidecar_name(path, beside[file], code)
+            os.rename(file, target)
+            logger.log("ACTION", f"Renamed {file} to {os.path.basename(target)}, as it's {name(code)}")
+            self.store.add_tag_history(path, f"Named the subtitle file {os.path.basename(target)}, as it's {name(code)}")
+
+    def save_tags(self, path, changes, files=None):
+        """Your tags for a file, written in turn so you can go on to the next one. saving() says how it's going.
+        files names subtitle files beside it with their language, {file: code}."""
+        self._saving[path] = "Waiting to save the tags" if self.busy() else "Saving the tags"
+        self.background(self._save_tags, path, changes, files, wait=True)
+
+    def _save_tags(self, path, changes, files=None, wait=True):
         try:
-            self.tag(path, changes, wait=wait)
+            self.tag(path, changes, wait=wait, files=files)
             self._saving.pop(path, None)
         except Busy:
             self._saving[path] = "The tags weren't saved: stopped"
@@ -1038,7 +1105,7 @@ class Engine:
     def saving(self, path):
         return self._saving.get(path)
 
-    def tag(self, path, changes, wait=False, guesses=None, since=None, automatic=False):
+    def tag(self, path, changes, wait=False, guesses=None, since=None, automatic=False, files=None):
         """Set the language of tracks, e.g. {2: "eng", 4: "fra"}. Returns what was done.
 
         guesses ({index: guess}) says the tags come from detection rather than from you. Unless every one is at
@@ -1050,6 +1117,13 @@ class Engine:
                 return "Stopped"
             if path in self._saving:
                 self._saving[path] = "Saving the tags"
+            if files:
+                self._name_files(path, files)
+                if not changes:
+                    library = self.library_for(path)
+                    self.check_file(library, path, reread=True)
+                    self.notify(path)
+                    return "Named the subtitle files"
             return self._write_tags(path, changes, guesses)
 
     def _write_tags(self, path, changes, guesses=None):
