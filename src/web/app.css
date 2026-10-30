@@ -406,3 +406,10 @@ input[type="range"] { width: 100%; accent-color: var(--accent); margin: 0.4rem 0
 .track.file.bazarr { border-color: var(--ok); }
 .track.file.not-bazarr { border-color: var(--warn); }
 .tag-head .badge { margin-left: 0.4rem; }
+
+/* Pop-ups for problems with Radarr, Sonarr, Bazarr or Jellyfin */
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 50; display: flex; flex-direction: column; gap: 8px; width: min(420px, calc(100vw - 32px)); }
+.toast { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-left: 4px solid var(--warn); border-radius: var(--radius); box-shadow: var(--shadow); padding: 10px 12px; display: flex; gap: 10px; align-items: flex-start; font-size: 0.9rem; }
+.toast .toast-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.toast .toast-close { background: none; border: none; color: var(--muted); font-size: 1.1rem; line-height: 1; padding: 2px 4px; cursor: pointer; }
+.link-button { background: none; border: none; color: var(--accent); padding: 0.4rem 0; cursor: pointer; font-size: 0.88rem; text-decoration: underline; }

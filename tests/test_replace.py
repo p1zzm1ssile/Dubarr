@@ -182,3 +182,21 @@ def test_a_series_is_rescanned_once_however_many_episodes_changed(arrs, tmp_path
     engine.wait_for_notices()
     rescans = [body for m, p, body in writes(calls, "sonarr") if p == "/command"]
     assert rescans == [{"name": "RescanSeries", "seriesId": 7}]
+
+
+def test_folders_radarr_has_that_dubarr_cant_see_pop_up(arrs, tmp_path, monkeypatch):
+    calls, answers = arrs
+    (tmp_path / "movies").mkdir()
+    answers[("radarr", "GET", "/rootfolder")] = [{"path": "/data/movies"}, {"path": "/data/media/anime"}]
+    answers[("sonarr", "GET", "/rootfolder")] = [{"path": "/data/tv"}]
+    monkeypatch.setattr(config, "library_list", [{"path": str(tmp_path / "anime"), "audio": ["eng"], "subtitles": ["eng"]}])
+    engine = Engine(Store(str(tmp_path / "db")))
+    engine.check_mappings()
+    messages = [a["message"] for a in engine.alerts()]
+    assert len(messages) == 2  # /data/movies maps to the movies folder, which exists
+    assert any("Radarr keeps films in /data/media/anime" in m and f"/data/media/anime={tmp_path / 'anime'}" in m
+               for m in messages)
+    assert any("Sonarr keeps series in /data/tv" in m for m in messages)
+    engine.check_mappings()
+    assert len(engine.alerts()) == 2  # not repeated
+    assert engine.alerts(since=engine.alerts()[-1]["id"]) == []

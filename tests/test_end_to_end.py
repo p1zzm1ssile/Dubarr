@@ -577,3 +577,10 @@ def test_put_in_any_subtitle_file_you_choose_and_suggestions_survive(library, en
     assert tracks(film, "subtitle") == ["eng", "eng"] and not named.exists()
     row = engine.store.file(film)
     assert {i: g["language"] for i, g in engine.guesses(row).items()} == {1: "ita"}
+
+
+def test_lines_of_a_subtitle_file(tmp_path):
+    from core import detect
+    srt = tmp_path / "Film.srt"
+    srt.write_text("1\n00:00:00,500 --> 00:00:01,500\n<i>Where were you?</i>\n\n2\n00:00:01,600 --> 00:00:02,500\nLate.\n")
+    assert detect.file_lines(str(srt)) == ["Where were you?", "Late."]

@@ -212,6 +212,16 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(200, {"stills": ["data:image/jpeg;base64," + base64.b64encode(s).decode()
                                                       for s in stills]})
                 return self.send(200, {"lines": subtitle_lines(info, index)})
+            if path == "/api/file-lines":
+                # A few lines of a subtitle file beside the film, from about a quarter of the way in
+                video, file = query.get("path", ""), query.get("file", "")
+                if file not in [f["path"] for f in find_sidecars(video) if f["text"]] or not engine.library_for(video):
+                    raise ValueError("That isn't a text subtitle file beside a film in your libraries")
+                lines = detection.file_lines(file)
+                if not lines:
+                    raise ValueError("No lines found in this file")
+                start = len(lines) // 4 if len(lines) > 40 else 0
+                return self.send(200, {"lines": lines[start:start + 12]})
             if path == "/api/logs":
                 return self.send(200, read_logs(query.get("filter", "all")))
             if path == "/api/logs/download":
@@ -492,6 +502,7 @@ def status_report():
     report["activity"] = engine.progress()
     report["report_only"] = config.report_only
     report["in_window"] = in_window(config.active_from, config.active_until)
+    report["alerts"] = engine.alerts()
     report["last_scan"] = engine.last_scan or None
     report["next_scan"] = (engine.last_scan + config.scan_interval_hours * 3600) if engine.last_scan else None
     return report

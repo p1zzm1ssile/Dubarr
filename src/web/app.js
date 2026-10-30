@@ -100,6 +100,30 @@ function flash(node, ok, message) {
 
 // ---------- Header ----------
 
+// Problems with the other apps (can't reach one, a Folder mapping missing) pop up in the corner until closed
+let alertsSeen = 0;
+try { alertsSeen = Number(localStorage.getItem("dubarr-alerts-seen")) || 0; } catch {}
+const shownAlerts = new Set();
+function showAlerts(alerts) {
+  let box = document.querySelector(".toasts");
+  if (!box) { box = el("div", { class: "toasts", role: "status", "aria-live": "polite" }); document.body.append(box); }
+  // A restart numbers them from 1 again
+  if (alerts.length && Math.max(...alerts.map((a) => a.id)) < alertsSeen) alertsSeen = 0;
+  for (const a of alerts) {
+    if (a.id <= alertsSeen || shownAlerts.has(a.id)) continue;
+    shownAlerts.add(a.id);
+    const close = el("button", { type: "button", class: "toast-close", text: "×", "aria-label": "Close" });
+    const toast = el("div", { class: "toast" },
+      el("div", { class: "toast-body" }, el("strong", { text: a.service }), el("div", { text: a.message })), close);
+    close.addEventListener("click", () => {
+      toast.remove();
+      alertsSeen = Math.max(alertsSeen, a.id);
+      try { localStorage.setItem("dubarr-alerts-seen", String(alertsSeen)); } catch {}
+    });
+    box.append(toast);
+  }
+}
+
 async function refreshHealth() {
   const pill = document.getElementById("health");
   const text = document.getElementById("health-text");
@@ -108,6 +132,7 @@ async function refreshHealth() {
     pill.className = "pill " + (h.healthy ? "ok" : "bad");
     text.textContent = !h.healthy ? "Needs attention" : h.activity ? h.activity.task + "…" : "Healthy";
     pill.title = [...h.problems, h.report_only ? "Report only: no files are changed by themselves" : "Changing files by itself"].join("\n");
+    showAlerts(h.alerts || []);
     return h;
   } catch {
     pill.className = "pill bad";
@@ -269,6 +294,10 @@ function detectButton(file, t, preview, select) {
 }
 
 function tagPanel(file, onSaved) {
+  // The tracks and files that need you come first; the rest wait behind Show all
+  const removing = new Set(file.remove || []);
+  const issue = (t) => t.language === "und" || removing.has(t.index);
+  const fileIssue = (f) => f.language === "und" || (file.remove_files || []).includes(f.path);
   const selects = {};
   const removeTrack = {};
   const removeFile = {};
@@ -319,7 +348,7 @@ function tagPanel(file, onSaved) {
     const details = [t.type === "audio" ? "Audio" : "Subtitles", `track ${t.index}`, t.codec,
       t.channels ? `${t.channels} ch` : "", t.title ? `“${t.title}”` : "",
       t.forced ? "forced" : "", t.commentary ? "commentary" : ""].filter(Boolean).join(" · ");
-    return el("div", { class: `tag-track${t.language === "und" ? " untagged" : ""}` },
+    return el("div", { class: `tag-track${t.language === "und" ? " untagged" : ""}`, "data-issue": issue(t) ? "1" : "" },
       el("div", { class: "tag-head" },
         el("div", {}, el("strong", { text: details }),
           el("div", { class: "small muted", text: t.language === "und" ? "No language tag" : `Tagged ${langName(t.language)}` })),
@@ -340,6 +369,7 @@ function tagPanel(file, onSaved) {
       confidence: f.guess_confidence, sure: true } : null;
     if (g) suggested.replaceChildren(suggestion(g, () => fileSelects[f.path]));
     const controls = [];
+    const previews = [];
     if (f.text) {
       const detect = el("button", { type: "button", text: "Detect", title: "Reads the file and suggests its language" });
       detect.addEventListener("click", async () => {
@@ -365,16 +395,31 @@ function tagPanel(file, onSaved) {
           putIn.disabled = false;
         }
       });
-      controls.push(detect, putIn);
+      const lines = el("button", { type: "button", text: "Show some lines" });
+      const preview = el("div", { class: "tag-preview" });
+      lines.addEventListener("click", async () => {
+        lines.disabled = true;
+        preview.replaceChildren(el("div", { class: "muted small", text: "Reading…" }));
+        try {
+          const r = await api(`/api/file-lines?${new URLSearchParams({ path: file.path, file: f.path })}`);
+          preview.replaceChildren(el("ul", { class: "sub-lines" }, r.lines.map((l) => el("li", { text: l }))));
+        } catch (e) {
+          preview.replaceChildren(el("div", { class: "error-text", text: e.message }));
+        } finally {
+          lines.disabled = false;
+        }
+      });
+      controls.push(lines, detect, putIn);
+      previews.push(preview);
     }
-    return el("div", { class: `tag-track${f.language === "und" ? " untagged" : ""}` },
+    return el("div", { class: `tag-track${f.language === "und" ? " untagged" : ""}`, "data-issue": fileIssue(f) ? "1" : "" },
       el("div", { class: "tag-head" },
         el("div", {}, el("strong", { text: `Subtitle file · ${f.path.split("/").pop()}` }),
           el("div", { class: "small muted" }, `${f.language === "und" ? "No language in its name" : langName(f.language)} · ${f.format.toUpperCase()}${f.size ? ` · ${bytes(f.size)}` : ""}`,
             from ? el("span", { class: `badge ${f.from_bazarr ? "ok" : "warn"}`, text: from }) : null)),
         el("div", { class: "tag-controls" }, ...controls, fileSelects[f.path],
           el("label", { class: "remove-pick" }, removeFile[f.path], "Remove"))),
-      suggested);
+      suggested, ...previews);
   });
 
   const remove = el("button", { type: "button", class: "danger", text: "Remove ticked" });
@@ -423,6 +468,19 @@ function tagPanel(file, onSaved) {
     }
   });
 
+  const all = [...rows, ...fileRows];
+  const fine = all.filter((r) => !r.dataset.issue);
+  let showAll = null;
+  if (fine.length && fine.length < all.length) {
+    for (const r of fine) r.hidden = true;
+    showAll = el("button", { type: "button", class: "link-button", text: `Show all ${all.length} tracks and files` });
+    showAll.addEventListener("click", () => {
+      const hiding = !fine[0].hidden;
+      for (const r of fine) r.hidden = hiding;
+      showAll.textContent = hiding ? `Show all ${all.length} tracks and files` : "Show only what needs you";
+    });
+  }
+
   return el("div", { class: "tag-panel" },
     el("p", { class: "small muted", text: "Listen to each track or read a few lines, choose its language, and save. "
       + "Or tick Remove on the tracks and subtitle files you don't want, and press Remove ticked. "
@@ -430,6 +488,7 @@ function tagPanel(file, onSaved) {
       + "A subtitle file beside the film can't hold a tag, so its name says the language instead: Film.srt becomes Film.en.srt." }),
     rows,
     fileRows,
+    showAll,
     el("div", { class: "card-actions" }, save, remove, result));
 }
 
@@ -644,7 +703,9 @@ async function showDashboard(selected) {
           el("span", { class: "muted small", text: (a.total ? `${a.done.toLocaleString()} of ${a.total.toLocaleString()}`
             : a.bytes_total ? `${bytes(a.bytes_done)} of ${bytes(a.bytes_total)}`
             : a.detail === "Listing files" ? "listing files" : `${a.done} file(s) so far`)
-            + (pct !== null && (a.total || a.bytes_total) ? ` (${pct}%)` : "") + (a.done || a.bytes_done ? eta : "") }),
+            + (pct !== null && (a.total || a.bytes_total) ? ` (${pct}%)` : "")
+            // Time left once there's something to go on; until then how long it's been going, so it never looks stuck
+            + ((a.done || a.bytes_done) && eta ? eta : ` · running for ${a.elapsed_seconds < 60 ? `${a.elapsed_seconds}s` : duration(a.elapsed_seconds)}`) }),
           el("span", { class: "spacer" }), stop, stopAll),
         pct !== null ? el("div", { class: "progress" }, el("span", { style: `width:${pct}%` })) : el("div", { class: "progress" }, el("span", { style: "width:100%;opacity:.35" })),
         el("div", { class: "muted small mono", style: "word-break:break-all", text: a.detail || "" }),
