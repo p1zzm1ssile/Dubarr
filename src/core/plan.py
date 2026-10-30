@@ -278,6 +278,9 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
         wanted_audio = [t for t in audio if t.language == original]
         if wanted_audio:
             original_only = f"Only {describe([original])} audio, the original language"
+    # Only music or effects, tagged No speech: there's no language to want, so it's fine as it is
+    if not wanted_audio and all(t.language == NO_LANGUAGE for t in audio):
+        wanted_audio = list(audio)
     if not wanted_audio:
         return Plan(NO_WANTED_AUDIO,
                     f"No {describe(rules.audio_languages)} audio, only {describe(_languages(audio))}",

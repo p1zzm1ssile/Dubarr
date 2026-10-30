@@ -116,14 +116,13 @@ def _built_in(text: str) -> tuple:
     return normalise(code), float(confidence)
 
 
-def file_language(path: str):
-    """(language, confidence) of a subtitle file beside a film, read by the built-in detector. None unless it's
-    sure."""
+def file_lines(path: str) -> list:
+    """The words of a subtitle file beside a film, a line at a time, without numbers, times or styling."""
     try:
         with open(path, "rb") as f:
             raw = f.read(200_000)
     except OSError:
-        return None
+        return []
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -135,7 +134,13 @@ def file_language(path: str):
         line = TAG_MARKUP.sub("", line).strip()
         if line and not line.isdigit() and not TIMESTAMP_LINE.match(line) and not line.startswith(("[", "Style:", "Format:")):
             lines.append(line)
-    words = "\n".join(lines)[:3000]
+    return lines
+
+
+def file_language(path: str):
+    """(language, confidence) of a subtitle file beside a film, read by the built-in detector. None unless it's
+    sure."""
+    words = "\n".join(file_lines(path))[:3000]
     if len(words) < 20:
         return None
     code, confidence = _built_in(words)

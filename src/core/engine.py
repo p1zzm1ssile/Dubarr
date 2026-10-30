@@ -172,6 +172,8 @@ class Engine:
         self.detect_pause = DETECT_PAUSE_SECONDS
         self._services = {}
         self._unreachable = {}  # Radarr, Sonarr or Jellyfin: when to try asking them again
+        self._alerts = []       # problems with the other apps, newest last, shown as pop-ups in the web UI
+        self._alert_id = 0
 
     # Jobs
 
@@ -337,6 +339,7 @@ class Engine:
         except ServiceError as e:
             logger.warning(f"Couldn't ask Bazarr which subtitles it downloaded: {e}. Trying again in 10 minutes")
             self._unreachable["bazarr"] = time.time() + 600
+            self.alert("Bazarr", f"Couldn't ask Bazarr which subtitles it downloaded: {e}")
             return None
 
     def original_language(self, path):
@@ -354,6 +357,7 @@ class Engine:
             except ServiceError as e:
                 logger.warning(f"Couldn't ask {arr.name} for original languages: {e}. Trying again in 10 minutes")
                 self._unreachable[kind] = time.time() + 600
+                self.alert(arr.name, f"Couldn't ask {arr.name} for original languages: {e}")
                 continue
             if code:
                 return code
@@ -374,6 +378,7 @@ class Engine:
             except ServiceError as e:
                 logger.warning(f"Couldn't tag {os.path.basename(path)} in {service.name}: {e}. Trying again in 10 minutes")
                 self._unreachable[kind] = time.time() + 600
+                self.alert(service.name, f"Couldn't tag {os.path.basename(path)} in {service.name}: {e}")
                 continue
             if title:
                 logger.info(f"Tagged {title} as {label} in {service.name}: only its original language audio")
@@ -482,12 +487,47 @@ class Engine:
             self.tag_original_only(path)
         return status
 
+    def alert(self, service, message):
+        """A problem with another app worth a pop-up. The same one isn't repeated within 10 minutes."""
+        now = time.time()
+        if any(a["message"] == message and now - a["at"] < 600 for a in self._alerts):
+            return
+        self._alert_id += 1
+        self._alerts = (self._alerts + [{"id": self._alert_id, "at": now, "service": service, "message": message}])[-20:]
+
+    def alerts(self, since=0):
+        return [a for a in self._alerts if a["id"] > since]
+
+    def check_mappings(self):
+        """Pop up the folders Radarr and Sonarr keep films in that Dubarr can't see, the usual sign of a missing
+        Folder mapping (paths set up the TRaSH guides way differ between containers)."""
+        for kind in ("radarr", "sonarr"):
+            arr = self._service(kind)
+            if not arr or time.time() < self._unreachable.get(kind, 0):
+                continue
+            try:
+                missing = arr.unmapped_folders()
+            except ServiceError as e:
+                self._down(kind, e)
+                self.alert(arr.name, str(e) if arr.name in str(e) else f"Couldn't reach {arr.name}: {e}")
+                continue
+            for remote, local in missing:
+                hint = ""
+                same = [lib["path"] for lib in config.library_list
+                        if os.path.basename(lib["path"].rstrip("/")) == os.path.basename(remote.rstrip("/"))]
+                if same:
+                    hint = f", e.g. {remote}={same[0]}"
+                self.alert(arr.name, f"{arr.name} keeps {'films' if kind == 'radarr' else 'series'} in {remote}, which "
+                           f"Dubarr can't see{f' (looked in {local})' if local != remote else ''}. If it's one of your "
+                           f"libraries, add a Folder mapping in Settings > {arr.name}{hint}")
+
     def scan(self, trigger="manual", paths=None, wait=False):
         """Check every file in the libraries, or just the paths given."""
         with self.job("Scanning", wait=wait):
             started = time.time()
             counts = {}
             if paths is None:
+                self.check_mappings()
                 libraries = config.library_list
                 self.store.forget_libraries([lib["path"] for lib in libraries])
                 found = []
@@ -757,6 +797,8 @@ class Engine:
             if replaced:
                 logger.log("ACTION", f"Replaced {replaced} file(s) with no audio through Radarr or Sonarr")
             if len(rows) > replaced:
+                self.alert("Radarr/Sonarr", f"{len(rows) - replaced} file(s) with no audio couldn't be replaced. The No "
+                           "audio list says why for each. If Radarr or Sonarr don't know them, check the Folder mapping")
                 logger.warning(f"{len(rows) - replaced} file(s) with no audio couldn't be replaced. The No audio list "
                                "says why for each one")
 
@@ -992,6 +1034,7 @@ class Engine:
         except ServiceError as e:
             logger.warning(f"Couldn't ask Bazarr which subtitles it downloaded: {e}. Trying again in 10 minutes")
             self._unreachable["bazarr"] = time.time() + 600
+            self.alert("Bazarr", f"Couldn't ask Bazarr which subtitles it downloaded: {e}")
             return None
 
     # Restoring
@@ -1369,6 +1412,9 @@ class Engine:
     def _down(self, kind, e):
         """Note an app that couldn't be reached, so it isn't asked again for 10 minutes. Returns whether that's new."""
         new = time.time() >= self._unreachable.get(kind, 0)
+        if new:
+            name_ = kind.capitalize()
+            self.alert(name_, str(e) if name_ in str(e) else f"Couldn't reach {name_}: {e}")
         if isinstance(e, ServiceError) and ("Can't reach" in str(e) or "didn't answer in time" in str(e)):
             self._unreachable[kind] = time.time() + 600
         return new

@@ -1,6 +1,7 @@
 """Radarr, Sonarr, Bazarr and Jellyfin: tell them to look at a file again after Dubarr changes it, and have
 Radarr or Sonarr replace a file that can't be fixed."""
 
+import os
 import posixpath
 import re
 import threading
@@ -69,6 +70,17 @@ class Arr:
                                for i in self._request("GET", endpoint)]
                 self._loaded = time.time()
             return self._items
+
+    def unmapped_folders(self):
+        """Root folders Radarr or Sonarr keeps films in that Dubarr can't see, as (their path, where Dubarr looked).
+        Usually a missing Folder mapping, e.g. /data/media/anime there being /anime here."""
+        missing = []
+        for folder in self._request("GET", "/rootfolder") or []:
+            remote = folder.get("path") or ""
+            local = to_local(remote, self.paths)
+            if remote and not os.path.isdir(local):
+                missing.append((remote, local))
+        return missing
 
     def _match(self, local_path):
         remote = to_remote(local_path, self.paths)

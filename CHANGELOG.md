@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.1
+
+- **Music or effects only is fine.** A file whose only audio is tagged No speech (music or effects only) now counts as Already clean, with nothing to add in Settings. Next to audio in a language you don't keep it still shows under No wanted audio (#36).
+- **Show some lines for subtitle files.** Subtitle files beside a film have Show some lines under Listen & tag, like subtitle tracks, to check a language before trusting Detect.
+- **Listen & tag shows what needs you.** The panel opens on the tracks and files that are untagged or will be removed. Show all brings back the rest.
+- **Every job shows it's moving.** Until there's enough to estimate the time left, the progress line says how long the job has been running.
+- **Pop-ups for problems with the other apps.** When Radarr, Sonarr, Bazarr or Jellyfin can't be reached, or files with no audio couldn't be replaced, a note pops up in the corner until closed. Each scan also checks the folders Radarr and Sonarr keep films in: one Dubarr can't see, the usual sign of a missing Folder mapping (common with TRaSH guide paths), pops up with a suggested mapping.
+
 ## 0.9.0
 
 - **Subtitle files beside a film work like its tracks.** Under Listen & tag, each subtitle file has a language list, Detect (reads the file and suggests its language), Put in and Remove, next to the film's own tracks. A file can't hold a language tag, so choosing its language renames it to say so: Film.srt becomes Film.en.srt, keeping forced and SDH in the name. Use suggestions does the same with Dubarr's guess (#29).

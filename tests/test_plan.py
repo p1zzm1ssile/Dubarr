@@ -483,3 +483,14 @@ def test_only_putting_files_in_still_rewrites():
     assert p.status == plans.CHANGE and p.rewrites and not p.remove
     assert p.message == "Put the English subtitle file beside it into the film"
     assert decide(info, MUX, tracks=False).status == plans.CLEAN
+
+
+def test_music_or_effects_only_is_fine():
+    """A file whose only audio is tagged No speech has no language to want (#36). Next to a language you don't
+    keep, it doesn't make the film wanted."""
+    from utils.languages import NO_LANGUAGE
+    assert decide(media(VIDEO, audio(NO_LANGUAGE)), ENGLISH).status == plans.CLEAN
+    assert decide(media(VIDEO, audio(NO_LANGUAGE), audio(NO_LANGUAGE)), ENGLISH).status == plans.CLEAN
+    assert decide(media(VIDEO, audio("fra"), audio(NO_LANGUAGE)), ENGLISH).status == plans.NO_WANTED_AUDIO
+    p = decide(media(VIDEO, audio("eng"), audio(NO_LANGUAGE), audio("fra")), ENGLISH)
+    assert [r["language"] for r in p.remove] == ["fra"]
