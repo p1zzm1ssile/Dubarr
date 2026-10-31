@@ -205,3 +205,22 @@ def test_bazarr_taking_its_time_isnt_an_error(fake_bazarr, monkeypatch):
         raise requests.exceptions.ReadTimeout()
     monkeypatch.setattr(requests, "request", slow)
     Bazarr(config).action("series", 7, "scan-disk")  # Bazarr has it; it answers when it's done
+
+
+def test_a_long_history_is_read_a_page_at_a_time(monkeypatch):
+    """Asking for all of a big history at once took Bazarr longer than the timeout."""
+    from types import SimpleNamespace
+    from services.connections import Bazarr
+    history = [{"action": 1, "subtitles_path": f"/movies/F{n}/F{n}.en.srt", "provider": "p"} for n in range(600)]
+    asked = []
+
+    def request(method, url, headers=None, params=None, data=None, timeout=None, **kwargs):
+        asked.append((params["start"], params["length"], timeout))
+        page = history[params["start"]:params["start"] + params["length"]] if "movies" in url else []
+        return FakeResponse({"data": page, "total": len(history) if "movies" in url else 0})
+
+    monkeypatch.setattr(requests, "request", request)
+    cfg = SimpleNamespace(bazarr_url="http://bazarr:6767", bazarr_api_key="k", bazarr_paths=[], request_timeout=30)
+    sources = Bazarr(cfg).subtitle_sources()
+    assert len(sources) == 600
+    assert [a[0] for a in asked[:3]] == [0, 250, 500] and all(a[2] >= 60 for a in asked)
