@@ -347,6 +347,26 @@ def test_picture_subtitles_go_when_a_text_file_is_beside_the_film():
     assert "1 picture subtitle track (a text file replaces it)" in p.message
 
 
+def test_untagged_picture_subtitles_go_when_every_kept_language_has_a_text_file():
+    """Blu-ray rips often leave PGS tracks untagged, so they can't be matched to a file by language."""
+    prefer = Rules(["eng"], ["eng"], prefer_text_files=True)
+    info = media(VIDEO, audio("eng"), sub("und", codec="hdmv_pgs_subtitle", frames=1500),
+                 sub("und", codec="hdmv_pgs_subtitle", frames=1400), sub("und", codec="hdmv_pgs_subtitle", frames=30))
+    info.external = [sidecar("eng")]
+    p = decide(info, prefer)
+    assert p.status == plans.CHANGE and [r["index"] for r in p.remove] == [2, 3]  # the short one looks forced
+    # Without the file there's no telling what they are: they wait for a language
+    info.external = []
+    assert decide(info, prefer).status == plans.UNKNOWN_SUBTITLES
+    # A kept language without a text file: they might be it
+    info.external = [sidecar("eng")]
+    assert decide(info, Rules(["eng", "deu"], ["eng", "deu"], prefer_text_files=True)).status == plans.UNKNOWN_SUBTITLES
+    # Several with lengths unknown: one might be forced, so they stay
+    info = media(VIDEO, audio("eng"), sub("und", codec="hdmv_pgs_subtitle"), sub("und", codec="hdmv_pgs_subtitle"))
+    info.external = [sidecar("eng")]
+    assert decide(info, prefer).status == plans.UNKNOWN_SUBTITLES
+
+
 # Keeping the original language
 
 ORIGINAL = Rules(["eng"], ["eng"], keep_original_audio=True)

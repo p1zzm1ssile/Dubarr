@@ -340,6 +340,17 @@ def decide(info: MediaInfo, rules: Rules, tracks: bool = True) -> Plan:
             if (t.index not in removing and t.language in text_files and t.language in rules.subtitle_languages
                     and not t.forced and t.codec.lower() not in SUBTITLE_CODECS):
                 remove.append(_removal(t, "Picture subtitles, with a text file beside the film"))
+        # Untagged picture subtitles (common on Blu-ray rips) can't be matched to a file by language. When every
+        # subtitle language you keep has a text file beside the film, they're redundant whatever they are, unless
+        # they look forced: much shorter than the rest
+        untagged_pictures = [t for t in subtitles if t.language == UNDEFINED and t.index not in removing
+                             and t.codec.lower() not in SUBTITLE_CODECS and not t.forced]
+        if untagged_pictures and rules.subtitle_languages and set(rules.subtitle_languages) <= text_files:
+            for t in untagged_pictures:
+                # Several, with no way to compare their lengths: one might be forced, so they all stay
+                if len(untagged_pictures) == 1 or (_length(t, untagged_pictures) is not None
+                                                   and not likely_forced(t, untagged_pictures)):
+                    remove.append(_removal(t, "Picture subtitles, with a text file beside the film"))
 
     # Subtitle files beside the film
     remove_files = []
