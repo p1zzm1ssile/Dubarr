@@ -346,6 +346,17 @@ class Handler(BaseHTTPRequestHandler):
                     only = data.get("only") or None
                     if only not in (None, "files", "tracks"):
                         raise ValueError('only must be "files" or "tracks"')
+                    if only and status is None:
+                        # Say straight away when the choice has nothing to do, rather than quietly doing nothing
+                        n = engine.to_apply(paths, library, only)
+                        if not n:
+                            raise ValueError("None of these has subtitle files beside it to remove: their subtitles "
+                                             "are tracks inside the film. Choose \"Only tracks inside the film\" or \"Everything\" next to Apply"
+                                             if only == "files" else
+                                             "None of these has tracks to remove, only subtitle files beside it. "
+                                             "Choose \"Only .srt files beside the film\" or \"Everything\" next to Apply")
+                        engine.background(engine.apply, "manual", paths, True, library=library, status=status, only=only)
+                        return self.send(200, {"ok": True, "message": f"Changing {n} file(s)"})
                     engine.background(engine.apply, "manual", paths, True, library=library, status=status, only=only)
                     return self.send(200, {"ok": True, "message": "Changing files"})
                 if path == "/api/add-subtitles":

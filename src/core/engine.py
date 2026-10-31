@@ -609,7 +609,7 @@ class Engine:
             # Rewriting takes time in proportion to size, so estimate from bytes. Subtitle files alone go by count
             self.activity["bytes_total"] = 0 if only == "files" else sum(r["size"] for r in rows)
             run_id = self.store.start_run(trigger)
-            totals = {"changed": 0, "failed": 0, "saved": 0}
+            totals = {"changed": 0, "failed": 0, "saved": 0, "nothing": 0}
             lock = threading.Lock()
             working = []
 
@@ -628,9 +628,11 @@ class Engine:
                         if self.activity["bytes_total"]:
                             self.activity["bytes_done"] += row["size"]
                 with lock:
-                    if result is False:
+                    if result is None:
+                        totals["nothing"] += 1
+                    elif result is False:
                         totals["failed"] += 1
-                    elif result is not None:
+                    else:
                         totals["changed"] += 1
                         totals["saved"] += result
 
@@ -649,7 +651,24 @@ class Engine:
             if changed or failed:
                 logger.log("ACTION", f"Changed {changed} file(s), saving {size(saved)}"
                            + (f". {failed} couldn't be changed, see the Dashboard" if failed else ""))
+            if totals["nothing"] and only:
+                what = ("subtitle files beside them" if only == "files" else "tracks inside them")
+                logger.info(f"{totals['nothing']} file(s) had no {what} to remove, so they were left. "
+                            "Choose another option next to Apply for the rest of their changes")
             self.purge()
+
+    def to_apply(self, paths=None, library=None, only=None):
+        """How many files waiting to be changed have something to do for only ("files" or "tracks")."""
+        if paths:
+            rows = [r for r in (self.store.file(p) for p in paths) if r]
+        else:
+            _, rows = self.store.files(statuses=[plans.CHANGE], ignored=False, limit=1_000_000, library=library)
+        plan = lambda r: r["plan"] or {}
+        if only == "files":
+            return sum(1 for r in rows if plan(r).get("remove_files"))
+        if only == "tracks":
+            return sum(1 for r in rows if plan(r).get("remove") or plan(r).get("add_files"))
+        return len(rows)
 
     def change_file(self, run_id, path, allow_small=False, by_hand=False, subtitles_only=False, only=None):
         """Strip one file. Returns bytes saved, False on failure, or None if there was nothing to do.
