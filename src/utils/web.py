@@ -354,7 +354,7 @@ class Handler(BaseHTTPRequestHandler):
                                              "are tracks inside the film. Choose \"Only tracks inside the film\" or \"Everything\" next to Apply"
                                              if only == "files" else
                                              "None of these has tracks to remove, only subtitle files beside it. "
-                                             "Choose \"Only .srt files beside the film\" or \"Everything\" next to Apply")
+                                             "Choose \"Only subtitle files beside the film\" or \"Everything\" next to Apply")
                         engine.background(engine.apply, "manual", paths, True, library=library, status=status, only=only)
                         return self.send(200, {"ok": True, "message": f"Changing {n} file(s)"})
                     engine.background(engine.apply, "manual", paths, True, library=library, status=status, only=only)

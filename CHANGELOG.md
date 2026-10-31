@@ -2,7 +2,7 @@
 
 ## 0.9.5
 
-- **Clearer choices next to Apply.** They now read "Everything (tracks and .srt files)", "Only .srt files beside the film (quick)" and "Only tracks inside the film (audio and subtitles)". Blu-ray subtitles are tracks inside the film, so "Only .srt files" never touched them.
+- **Clearer choices next to Apply.** They now read "Everything (tracks and subtitle files)", "Only subtitle files beside the film (.srt, .ass, quick)" and "Only tracks inside the film (audio and subtitles)". Blu-ray subtitles are tracks inside the film, so "Only subtitle files" never touched them. Subtitle files means .srt, .ass, .ssa and .vtt beside the film.
 - **Told when a choice has nothing to do.** If none of the films has anything for the chosen option, Apply now says so and which option to pick, instead of quietly doing nothing.
 - **Films left alone are logged.** The log now says how many films had nothing to remove for the chosen option, so they were left.
 
