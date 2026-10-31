@@ -575,7 +575,7 @@ class Engine:
 
     # Changing files
 
-    def apply(self, trigger="manual", paths=None, force=False, wait=False, library=None, status=None):
+    def apply(self, trigger="manual", paths=None, force=False, wait=False, library=None, status=None, only=None):
         """Change files waiting to be changed.
 
         Automatic passes respect report-only mode, the time window and the batch size.
@@ -600,10 +600,14 @@ class Engine:
                     rows = rows[:config.max_changes_per_pass]
             if not rows:
                 return
+            # Quick ones first: subtitle files beside films are just deleted, then the smallest films
+            rows.sort(key=lambda r: (bool((r["plan"] or {}).get("remove") or (r["plan"] or {}).get("add_files")),
+                                     r["size"]))
+            self._check_recycle_disk(rows)
 
             self.activity["total"] = len(rows)
-            # Rewriting takes time in proportion to size, so estimate from bytes
-            self.activity["bytes_total"] = sum(r["size"] for r in rows)
+            # Rewriting takes time in proportion to size, so estimate from bytes. Subtitle files alone go by count
+            self.activity["bytes_total"] = 0 if only == "files" else sum(r["size"] for r in rows)
             run_id = self.store.start_run(trigger)
             totals = {"changed": 0, "failed": 0, "saved": 0}
             lock = threading.Lock()
@@ -614,13 +618,15 @@ class Engine:
                     working.append(os.path.basename(row["path"]))
                     self.activity["detail"] = ", ".join(working)
                 try:
-                    result = self.change_file(run_id, row["path"], allow_small=bool(paths and force), by_hand=force)
+                    result = self.change_file(run_id, row["path"], allow_small=bool(paths and force), by_hand=force,
+                                              only=only)
                 finally:
                     with lock:
                         working.remove(os.path.basename(row["path"]))
                         self.activity["detail"] = ", ".join(working)
                         self.activity["done"] += 1
-                        self.activity["bytes_done"] += row["size"]
+                        if self.activity["bytes_total"]:
+                            self.activity["bytes_done"] += row["size"]
                 with lock:
                     if result is False:
                         totals["failed"] += 1
@@ -645,11 +651,12 @@ class Engine:
                            + (f". {failed} couldn't be changed, see the Dashboard" if failed else ""))
             self.purge()
 
-    def change_file(self, run_id, path, allow_small=False, by_hand=False, subtitles_only=False):
+    def change_file(self, run_id, path, allow_small=False, by_hand=False, subtitles_only=False, only=None):
         """Strip one file. Returns bytes saved, False on failure, or None if there was nothing to do.
 
         by_hand is for files you chose to apply. subtitles_only removes just the subtitle files Bazarr didn't
-        download, leaving the rest of the change for later."""
+        download, leaving the rest of the change for later. only is "files" for just the subtitle files beside it
+        (quick: nothing is rewritten) or "tracks" for just the tracks inside it, leaving the rest for later."""
         library = self.library_for(path)
         if not library:
             return None
@@ -676,11 +683,41 @@ class Engine:
                 if not plan.rewrites and not plan.remove_files:
                     self.check_file(library, path)
                     return None
+            if only == "files":
+                plan = Plan(plans.CHANGE, "", remove_files=plan.remove_files)
+            elif only == "tracks":
+                plan.remove_files = []
+            if not plan.rewrites and not plan.remove_files:
+                self.check_file(library, path)
+                return None
 
         return self._carry_out(run_id, library, path, info, plan)
 
+    def _check_recycle_disk(self, rows):
+        """A recycle folder on another disk means every original is copied there in full after its new copy is
+        written, doubling the time each change takes. Said once a pass, as it's easy to fix."""
+        if not config.recycle_folder or config.recycle_days <= 0:
+            return
+        try:
+            target = config.recycle_folder
+            while not os.path.exists(target):
+                target = os.path.dirname(target)
+            recycle = os.stat(target).st_dev
+            for library in {self.library_for(r["path"])["path"] for r in rows if self.library_for(r["path"])}:
+                if os.stat(library).st_dev != recycle:
+                    message = (f"The recycle folder {config.recycle_folder} is on a different disk from {library}, "
+                               "so each original is copied there in full after the new copy is written, which "
+                               "about doubles the time each change takes. Leave Recycle folder empty in Settings to "
+                               "keep originals in the library, where moving them is instant")
+                    logger.warning(message)
+                    self.alert("Dubarr", message)
+                    return
+        except OSError:
+            pass
+
     def _carry_out(self, run_id, library, path, info, plan):
         """change_file()'s work once the plan is settled."""
+        started = time.time()
         root = swap.recycle_root(library["path"], config.recycle_folder)
         saved = 0
         try:
@@ -689,7 +726,9 @@ class Engine:
                 history_id = swap.swap(self.store, run_id, path, info.size, new.size, plan.message, plan.remove,
                                        root, config.recycle_days)
                 saved += info.size - new.size
-                logger.log("ACTION", f"{plan.message} from {path} (saved {size(info.size - new.size)}, change #{history_id})")
+                took = max(1.0, time.time() - started)
+                logger.log("ACTION", f"{plan.message} from {path} (saved {size(info.size - new.size)}, change #{history_id}, "
+                           f"took {took / 60:.1f} min at {info.size / took / 1024 / 1024:.0f} MB/s)")
             for f in plan.add_files:
                 message = f"Put the {name(f['language'])} subtitle file into the film"
                 if f.get("guessed"):

@@ -584,3 +584,37 @@ def test_lines_of_a_subtitle_file(tmp_path):
     srt = tmp_path / "Film.srt"
     srt.write_text("1\n00:00:00,500 --> 00:00:01,500\n<i>Where were you?</i>\n\n2\n00:00:01,600 --> 00:00:02,500\nLate.\n")
     assert detect.file_lines(str(srt)) == ["Where were you?", "Late."]
+
+
+def test_apply_subtitle_files_only_or_tracks_only(library, engine, monkeypatch):
+    """Subtitle files beside a film are just deleted, so they can go on their own, before the slow rewrite."""
+    monkeypatch.setattr(config, "strip_subtitle_files", True)
+    film = make_video(str(library / "Film" / "Film.mkv"), audio=("eng", "fre"))
+    french = library / "Film" / "Film.fr.srt"
+    french.write_text(ENGLISH_SRT)
+    engine.scan()
+    before = os.path.getmtime(film)
+    engine.apply("manual", [film], force=True, only="files")
+    assert not french.exists() and os.path.getmtime(film) == before  # the film wasn't touched
+    assert engine.store.file(film)["status"] == plans.CHANGE  # the French audio is still to go
+    french.write_text(ENGLISH_SRT)
+    engine.scan()
+    engine.apply("manual", [film], force=True, only="tracks")
+    assert tracks(film, "audio") == ["eng"] and french.exists()
+    engine.apply("manual", [film], force=True)
+    assert not french.exists()
+
+
+def test_a_recycle_folder_on_another_disk_is_pointed_out(library, engine, monkeypatch, tmp_path):
+    import core.engine as engine_module
+    film = make_video(str(library / "Film" / "Film.mkv"), audio=("eng", "fre"))
+    engine.scan()
+    monkeypatch.setattr(config, "recycle_folder", str(tmp_path / "elsewhere"))
+    real_stat = os.stat
+
+    class Other:
+        st_dev = -1
+
+    monkeypatch.setattr(engine_module.os, "stat", lambda p, *a, **k: Other if str(p) == str(tmp_path) else real_stat(p, *a, **k))
+    engine._check_recycle_disk([engine.store.file(film)])
+    assert any("different disk" in a["message"] for a in engine.alerts())
