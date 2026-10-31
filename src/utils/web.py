@@ -343,7 +343,10 @@ class Handler(BaseHTTPRequestHandler):
                     if library and library not in [lib["path"] for lib in config.library_list]:
                         raise ValueError("That library isn't set up in Dubarr")
                     status = NOT_BAZARR if data.get("status") == NOT_BAZARR else None
-                    engine.background(engine.apply, "manual", paths, True, library=library, status=status)
+                    only = data.get("only") or None
+                    if only not in (None, "files", "tracks"):
+                        raise ValueError('only must be "files" or "tracks"')
+                    engine.background(engine.apply, "manual", paths, True, library=library, status=status, only=only)
                     return self.send(200, {"ok": True, "message": "Changing files"})
                 if path == "/api/add-subtitles":
                     file = data.get("path", "")

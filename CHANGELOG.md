@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.2
+
+- **Apply subtitle files only, tracks only, or both.** Next to Apply on Will be changed, choose "Subtitle files only (quick)", "Tracks only" or both. Subtitle files beside a film are just deleted, so they go in seconds; the tracks inside need the film rewritten, which takes as long as your disk needs to copy it. The choice is remembered and also used by each film's Apply.
+- **Quick ones first.** A batch now does films with only subtitle files to remove first, then the smallest films, so the list shrinks fast.
+- **A recycle folder on another disk is pointed out.** Then every original is copied there in full after its new copy is written, about doubling each change. Dubarr now says so, with how to fix it.
+- **How fast each change was.** The log says how long each film took and at what speed, e.g. "took 6.2 min at 140 MB/s".
+
 ## 0.9.1
 
 - **Music or effects only is fine.** A file whose only audio is tagged No speech (music or effects only) now counts as Already clean, with nothing to add in Settings. Next to audio in a language you don't keep it still shows under No wanted audio (#36).

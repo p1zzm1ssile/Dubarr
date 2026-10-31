@@ -506,6 +506,13 @@ async function showDashboard(selected) {
   const listTitle = el("h2");
   const listHelp = el("p", { class: "muted small" });
   const applyAll = el("button", { type: "button", class: "primary" });
+  // What Apply does on Will be changed: subtitle files beside films are just deleted, so they can go on their own
+  const applyWhat = el("select", { "aria-label": "What to apply", class: "apply-what" },
+    el("option", { value: "", text: "Tracks and subtitle files" }),
+    el("option", { value: "files", text: "Subtitle files only (quick)" }),
+    el("option", { value: "tracks", text: "Tracks only" }));
+  try { applyWhat.value = localStorage.getItem("dubarr-apply-what") || ""; } catch {}
+  applyWhat.addEventListener("change", () => { try { localStorage.setItem("dubarr-apply-what", applyWhat.value); } catch {} });
   // On No audio: delete the files Radarr and Sonarr couldn't replace
   const deleteLeft = el("button", { type: "button", class: "danger", hidden: true });
   deleteLeft.addEventListener("click", () => {
@@ -545,7 +552,7 @@ async function showDashboard(selected) {
     notices, activity, stats, tiles,
     el("div", { class: "panel" },
       listTitle, listHelp,
-      el("div", { class: "toolbar" }, el("div", { style: "flex:1;min-width:200px" }, search), librarySelect, applyAll, deleteLeft, accept, listResult),
+      el("div", { class: "toolbar" }, el("div", { style: "flex:1;min-width:200px" }, search), librarySelect, applyWhat, applyAll, deleteLeft, accept, listResult),
       el("div", { style: "overflow-x:auto" }, table), more));
 
   async function act(path, body, button, done) {
@@ -586,7 +593,7 @@ async function showDashboard(selected) {
       }
       if (["change", "too_small", "not_bazarr"].includes(f.status) && !f.ignored) {
         const b = el("button", { type: "button", text: f.status === "not_bazarr" ? "Remove" : "Apply" });
-        b.addEventListener("click", () => act("/api/apply", { paths: [f.path] }, b));
+        b.addEventListener("click", () => act("/api/apply", { paths: [f.path], only: f.status === "change" ? applyWhat.value || null : null }, b));
         actions.push(b);
       }
       if (f.ignored) {
@@ -770,6 +777,7 @@ async function showDashboard(selected) {
       ...paths.map((p) => el("option", { value: p, text: p, selected: p === library })));
     currentCount = current.files;
     applyAll.hidden = !["change", "not_bazarr", "no_audio"].includes(status) || !current.files;
+    applyWhat.hidden = status !== "change" || !current.files;
     labelApplyAll();
     labelAccept();
     if (!openPanels.size) await loadFiles(false);
@@ -787,11 +795,13 @@ async function showDashboard(selected) {
       act("/api/replace", { library: library || null }, applyAll);
       return;
     }
+    const only = status === "change" ? applyWhat.value || null : null;
+    const removing = only === "files" ? "the unwanted subtitle files beside" : only === "tracks" ? "the unwanted tracks inside" : "the unwanted tracks and subtitle files from";
     const question = status === "not_bazarr"
       ? `Remove the subtitle files Bazarr didn't download from ${what} now? They go to the recycle folder, so you can restore them from History.`
-      : `Remove the unwanted tracks from ${what} now? Originals go to the recycle folder, so you can restore them from History.`;
+      : `Remove ${removing} ${what} now? Originals go to the recycle folder, so you can restore them from History.`;
     if (!confirm(question)) return;
-    act("/api/apply", { library: library || null, status }, applyAll);
+    act("/api/apply", { library: library || null, status, only }, applyAll);
   });
 
   let timer;
