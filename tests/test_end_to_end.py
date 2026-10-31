@@ -618,3 +618,10 @@ def test_a_recycle_folder_on_another_disk_is_pointed_out(library, engine, monkey
     monkeypatch.setattr(engine_module.os, "stat", lambda p, *a, **k: Other if str(p) == str(tmp_path) else real_stat(p, *a, **k))
     engine._check_recycle_disk([engine.store.file(film)])
     assert any("different disk" in a["message"] for a in engine.alerts())
+
+
+def test_how_many_have_something_to_do_for_each_choice(library, engine):
+    film = make_video(str(library / "Film" / "Film.mkv"), audio=("eng", "fre"))
+    engine.scan()
+    assert engine.to_apply(only="files") == 0 and engine.to_apply(only="tracks") == 1
+    assert engine.to_apply([film]) == 1

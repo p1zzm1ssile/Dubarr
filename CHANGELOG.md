@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.5
+
+- **Clearer choices next to Apply.** They now read "Everything (tracks and .srt files)", "Only .srt files beside the film (quick)" and "Only tracks inside the film (audio and subtitles)". Blu-ray subtitles are tracks inside the film, so "Only .srt files" never touched them.
+- **Told when a choice has nothing to do.** If none of the films has anything for the chosen option, Apply now says so and which option to pick, instead of quietly doing nothing.
+- **Films left alone are logged.** The log now says how many films had nothing to remove for the chosen option, so they were left.
+
 ## 0.9.4
 
 - **Untagged Blu-ray subtitles go when a text file replaces them.** With Remove picture subtitles when a text file is beside the film on, picture subtitle tracks (PGS) with no language tag used to leave the film under Untagged subtitles, as they couldn't be matched to Film.en.srt by language. When every subtitle language you keep has a text file beside the film, they're now removed too, so the film moves to Will be changed and Apply all handles them in bulk. A much shorter one, likely forced, stays, and so do several whose lengths can't be compared.
