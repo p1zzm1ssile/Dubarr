@@ -253,11 +253,11 @@ class Bazarr:
         self._lists = {}
         self._lock = threading.Lock()
 
-    def _request(self, method, path, params=None, slow_ok=False):
+    def _request(self, method, path, params=None, slow_ok=False, timeout=None):
         try:
             response = requests.request(method, self.url + "/api" + path, headers={"X-API-KEY": self.api_key},
                                         params=params, data=params if method != "GET" else None,
-                                        timeout=self.timeout)
+                                        timeout=timeout or self.timeout)
             response.raise_for_status()
             return response.json() if response.content else None
         except requests.exceptions.ReadTimeout as e:
@@ -286,9 +286,22 @@ class Bazarr:
         with self._lock:
             loaded, items = self._lists.get(kind, (0, None))
             if items is None or time.time() - loaded > CACHE_SECONDS:
-                items = self._data(self._request("GET", f"/{kind}", {"start": 0, "length": -1})) or []
+                items = self._pages(f"/{kind}")
                 self._lists[kind] = (time.time(), items)
             return items
+
+    def _pages(self, path, size=250):
+        """Every entry of one of Bazarr's lists, a page at a time. Asking for a big history in one go can take
+        Bazarr longer than any timeout, while each page comes back quickly. Pages get a minute or more each."""
+        entries, start = [], 0
+        while True:
+            answer = self._request("GET", path, {"start": start, "length": size}, timeout=max(self.timeout, 60))
+            page = self._data(answer) or []
+            entries += page
+            total = answer.get("total") if isinstance(answer, dict) else None
+            start += len(page)
+            if len(page) < size or (total is not None and start >= total) or start > 1_000_000:
+                return entries
 
     def subtitle_sources(self):
         """{subtitle file Bazarr downloaded, as Dubarr's path: the provider it came from, e.g. "opensubtitlescom"},
@@ -301,7 +314,7 @@ class Bazarr:
         latest, providers = {}, {}
         for kind in ("movies", "episodes"):
             # Newest first
-            for entry in self._data(self._request("GET", f"/{kind}/history", {"start": 0, "length": -1})) or []:
+            for entry in self._pages(f"/{kind}/history"):
                 if entry.get("subtitles_path"):
                     path = posixpath.normpath(to_local(entry["subtitles_path"].replace("\\", "/"), self.paths))
                     latest.setdefault(path, entry.get("action"))

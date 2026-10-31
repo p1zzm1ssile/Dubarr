@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.3
+
+- **Bazarr's subtitle history is read a page at a time.** Dubarr asked for Bazarr's whole history in one go, which with a big history took Bazarr longer than the request timeout, so "Couldn't ask Bazarr which subtitles it downloaded: Bazarr didn't answer in time" kept coming up although Bazarr was fine. It now reads 250 entries at a time, giving each page at least a minute. The same goes for Bazarr's film and series lists.
+
 ## 0.9.2
 
 - **Apply subtitle files only, tracks only, or both.** Next to Apply on Will be changed, choose "Subtitle files only (quick)", "Tracks only" or both. Subtitle files beside a film are just deleted, so they go in seconds; the tracks inside need the film rewritten, which takes as long as your disk needs to copy it. The choice is remembered and also used by each film's Apply.
