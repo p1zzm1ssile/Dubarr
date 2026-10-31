@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.4
+
+- **Untagged Blu-ray subtitles go when a text file replaces them.** With Remove picture subtitles when a text file is beside the film on, picture subtitle tracks (PGS) with no language tag used to leave the film under Untagged subtitles, as they couldn't be matched to Film.en.srt by language. When every subtitle language you keep has a text file beside the film, they're now removed too, so the film moves to Will be changed and Apply all handles them in bulk. A much shorter one, likely forced, stays, and so do several whose lengths can't be compared.
+
 ## 0.9.3
 
 - **Bazarr's subtitle history is read a page at a time.** Dubarr asked for Bazarr's whole history in one go, which with a big history took Bazarr longer than the request timeout, so "Couldn't ask Bazarr which subtitles it downloaded: Bazarr didn't answer in time" kept coming up although Bazarr was fine. It now reads 250 entries at a time, giving each page at least a minute. The same goes for Bazarr's film and series lists.
