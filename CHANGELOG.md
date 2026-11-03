@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.6
+
+- **.ass files are named in the Apply choices.** The quick option now reads "Only subtitle files beside the film (.srt, .ass, quick)", and "Everything" reads "tracks and subtitle files". Subtitle files means .srt, .ass, .ssa and .vtt beside the film; they were always handled, only the label said .srt.
+
 ## 0.9.5
 
 - **Clearer choices next to Apply.** They now read "Everything (tracks and .srt files)", "Only .srt files beside the film (quick)" and "Only tracks inside the film (audio and subtitles)". Blu-ray subtitles are tracks inside the film, so "Only .srt files" never touched them.

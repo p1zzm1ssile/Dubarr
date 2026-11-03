@@ -508,8 +508,8 @@ async function showDashboard(selected) {
   const applyAll = el("button", { type: "button", class: "primary" });
   // What Apply does on Will be changed: subtitle files beside films are just deleted, so they can go on their own
   const applyWhat = el("select", { "aria-label": "What to apply", class: "apply-what" },
-    el("option", { value: "", text: "Everything (tracks and .srt files)" }),
-    el("option", { value: "files", text: "Only .srt files beside the film (quick)" }),
+    el("option", { value: "", text: "Everything (tracks and subtitle files)" }),
+    el("option", { value: "files", text: "Only subtitle files beside the film (.srt, .ass, quick)" }),
     el("option", { value: "tracks", text: "Only tracks inside the film (audio and subtitles)" }));
   try { applyWhat.value = localStorage.getItem("dubarr-apply-what") || ""; } catch {}
   applyWhat.addEventListener("change", () => { try { localStorage.setItem("dubarr-apply-what", applyWhat.value); } catch {} });
