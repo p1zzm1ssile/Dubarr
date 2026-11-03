@@ -318,6 +318,9 @@ class Handler(BaseHTTPRequestHandler):
                 elif "trust_confidence" in changes and (waiting := engine.store.auto_tagged_paths()):
                     # Files tagged from a guess wait or not depending on this level, so check them against it
                     engine.background(engine.scan, "settings", paths=waiting, wait=True)
+                if {"recycle_days", "recycle_max_gb"} & changes.keys():
+                    # Empty what the new days or size limit no longer keeps now, not at the next daily run
+                    engine.purge_soon(why="settings changed")
                 return self.send(200, {"ok": True, "values": config.public_values()})
 
             if path == "/api/test":
@@ -486,6 +489,20 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/ignore":
                     engine.store.set_ignored(data.get("path", ""), bool(data.get("ignored")))
                     return self.send(200, {"ok": True})
+                if path == "/api/empty-recycle":
+                    try:
+                        days = int(data.get("older_than_days", 0))
+                    except (TypeError, ValueError):
+                        raise ValueError("older_than_days must be a number of days")
+                    if not 0 <= days <= 3650:
+                        raise ValueError("older_than_days must be between 0 and 3650")
+                    waiting = engine.recycle_summary()
+                    if not waiting["count"]:
+                        raise ValueError("The recycle folder is already empty")
+                    engine.purge_soon(days, "emptied by hand")
+                    what = "every original" if not days else f"originals older than {days} day(s)"
+                    return self.send(200, {"ok": True, "message": f"Emptying {what} now. The log says how much "
+                                           "was freed"})
                 if path == "/api/restore":
                     engine.restore(int(data.get("id", 0)))
                     return self.send(200, {"ok": True, "message": "Original restored"})
@@ -604,7 +621,8 @@ def history(query):
     except ValueError:
         offset = 0
     total, rows = engine.store.history(limit=200, offset=offset, search=query.get("search", "")[:200])
-    return {"total": total, "entries": rows, "runs": engine.store.runs(), "recycle_days": config.recycle_days}
+    return {"total": total, "entries": rows, "runs": engine.store.runs(), "recycle_days": config.recycle_days,
+            "recycle_max_gb": config.recycle_max_gb, "recycle": engine.recycle_summary()}
 
 
 def webhook(payload: dict):

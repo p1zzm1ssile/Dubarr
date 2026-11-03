@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.7
+
+- **Empty the recycle folder now.** History shows how many originals are in the recycle folder and how much space they take, with *Empty recycle folder now*: every original, or only those older than 1, 2, 3, 7 or 14 days. It starts straight away, even while a scan or a batch of changes is running.
+- **A size limit for the recycle folder.** Settings > General > *Most space originals may take (GB)*, for all recycle folders together. Past it, the oldest originals are emptied first, even if they're younger than the days kept. Off (0) by default. Worth setting for the first pass through a big library, when a few days of originals can reach terabytes.
+- **The recycle folder is emptied on time.** The daily run used to wait until a scan or batch had finished, which on a big library could be hours while the batch kept filling it. It now runs beside them, and changing the days or the size limit in Settings empties what they no longer keep straight away.
+- **Every run is logged**, even when there's nothing to empty, with what's still in the recycle folder, e.g. "nothing to empty (originals older than 2 days). 312 original(s), 6.5 TB, still in the recycle folder".
+- **Anime in the Unraid template.** The template now has an Anime folder (`/anime`) beside Movies and TV, and all three default to `/mnt/user0/data/media/...`, the TRaSH guides layout on the array disks.
+- **Unraid setup guide.** [docs/unraid-setup.md](docs/unraid-setup.md) covers the TRaSH folder layout, why to map libraries through `/mnt/user0` when the media share has a cache pool (otherwise every cleaned film lands on the cache and the mover has to copy it back), Folder mappings for Sonarr's TV and anime folders, and planning the recycle folder for the first pass.
+
 ## 0.9.6
 
 - **.ass files are named in the Apply choices.** The quick option now reads "Only subtitle files beside the film (.srt, .ass, quick)", and "Everything" reads "tracks and subtitle files". Subtitle files means .srt, .ass, .ssa and .vtt beside the film; they were always handled, only the label said .srt.
