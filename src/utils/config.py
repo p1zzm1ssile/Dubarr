@@ -83,7 +83,7 @@ TABS = {
 def _default_libraries():
     """The folders mapped in the Unraid template, when they exist."""
     libraries = []
-    for path in env_str("LIBRARIES", default="/movies,/tv,/media").split(","):
+    for path in env_str("LIBRARIES", default="/movies,/tv,/anime,/media").split(","):
         path = path.strip()
         if path and os.path.isdir(path):
             libraries.append({"path": path, "audio": "", "subtitles": ""})
@@ -217,6 +217,11 @@ FIELDS = [
     F("recycle_days", "general", "Keep originals for (days)", "int",
       env_int("RECYCLE_DAYS", default=7), section="Recycle folder", min=0, max=365,
       help="Originals can be restored from History until then. 0 deletes them as soon as the new file checks out."),
+    F("recycle_max_gb", "general", "Most space originals may take (GB)", "int",
+      env_int("RECYCLE_MAX_GB", default=0), section="Recycle folder", min=0, max=1_000_000,
+      help="For all recycle folders together. Past this, the oldest originals are emptied first, even if they're "
+           "younger than the days above. Worth setting for the first pass through a big library, when a few days "
+           "of originals can add up to terabytes. 0 means no limit."),
     F("recycle_folder", "general", "Recycle folder", "text",
       env_str("RECYCLE_FOLDER", default=""), section="Recycle folder",
       help="Leave empty to use a hidden .dubarr-recycle folder at the top of each library. That keeps originals "

@@ -26,6 +26,7 @@ def library(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "report_only", True)
     monkeypatch.setattr(config, "recycle_days", 7)
     monkeypatch.setattr(config, "recycle_folder", "")
+    monkeypatch.setattr(config, "recycle_max_gb", 0)
     monkeypatch.setattr(config, "process_hardlinked", False)
     monkeypatch.setattr(config, "active_from", 0)
     monkeypatch.setattr(config, "active_until", 0)
@@ -157,6 +158,65 @@ def test_purge_after_the_set_days(library, engine):
     assert engine.store.history_entry(entry["id"])["state"] == "purged"
     with pytest.raises(swap.SwapError, match="emptied"):
         engine.restore(entry["id"])
+
+
+def _three_changed(library, engine):
+    for n in range(3):
+        make_video(str(library / f"x{n}.mkv"), audio=("eng", "ita"))
+    engine.scan()
+    engine.apply("manual", force=True)
+    return sorted(engine.store.history()[1], key=lambda e: e["id"])
+
+
+def test_empty_every_original_now(library, engine, monkeypatch):
+    entries = _three_changed(library, engine)
+    assert engine.recycle_summary()["count"] == 3
+    result = engine.purge(0, "emptied by hand")
+    assert result["count"] == 3 and result["left"] == 0
+    assert result["freed"] == sum(e["original_size"] for e in entries)
+    assert all(not os.path.exists(e["backup_path"]) for e in entries)
+    assert engine.recycle_summary() == {"count": 0, "bytes": 0, "oldest": None}
+
+
+def test_empty_by_hand_keeps_younger_ones(library, engine):
+    entries = _three_changed(library, engine)
+    engine.store.update_history(entries[0]["id"], changed_at=time.time() - 3 * 86400)
+    result = engine.purge(2, "emptied by hand")
+    assert result["count"] == 1
+    assert engine.store.history_entry(entries[0]["id"])["state"] == "purged"
+    assert engine.store.history_entry(entries[1]["id"])["state"] == "done"
+
+
+def test_size_limit_empties_the_oldest_first(library, engine, monkeypatch):
+    entries = _three_changed(library, engine)
+    one = entries[0]["original_size"]
+    # Room for about two: the oldest goes, though it's well within the days kept
+    result = swap.empty_recycle(engine.store, 7, max_bytes=one * 2 + one // 2)
+    assert result["count"] == 1
+    assert engine.store.history_entry(entries[0]["id"])["state"] == "purged"
+    assert engine.store.history_entry(entries[2]["id"])["state"] == "done"
+
+
+def test_tick_empties_past_the_size_limit_while_busy(library, engine, monkeypatch):
+    entries = _three_changed(library, engine)
+    engine.last_purge = time.time()  # the daily run isn't due
+    engine.tick()
+    assert engine.store.history_entry(entries[0]["id"])["state"] == "done"  # no limit set: nothing goes
+    monkeypatch.setattr(config, "recycle_max_gb", 1e-9)  # about a byte: every original is over it
+    with engine.job("A long batch"):
+        engine.tick()
+    assert all(engine.store.history_entry(e["id"])["state"] == "purged" for e in entries)
+
+
+def test_purge_runs_beside_a_job_and_is_logged(library, engine, monkeypatch):
+    _three_changed(library, engine)
+    logged = []
+    monkeypatch.setattr("core.engine.logger.info", lambda m: logged.append(m))
+    engine.last_purge = 0
+    with engine.job("A long scan"):
+        engine.tick()
+    assert any("nothing to empty" in m and "3 original(s)" in m for m in logged)
+    assert engine.last_purge > 0
 
 
 def test_restore_whole_batch(library, engine):

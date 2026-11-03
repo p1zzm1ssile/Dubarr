@@ -59,10 +59,15 @@ MKV files are rewritten with mkvmerge (keeps Dolby Vision, HDR10+, fonts, chapte
 
 ## Install on Unraid
 
+**Read the [Unraid setup guide](docs/unraid-setup.md) first** if your media share uses a cache pool or the [TRaSH guides](https://trash-guides.info/File-and-Folder-Structure/) folder layout, or your library is big. It covers the things that are hard to undo afterwards.
+
 1. Add the template from `unraid/dubarr.xml` (or search Community Apps for Dubarr once it's listed).
-2. Map **Movies** and **TV** to your library folders, read/write. Map the same folders Radarr and Sonarr use, so the paths match.
+2. Map **Movies**, **TV** and **Anime** to your library folders, read/write. The template points them at `/mnt/user0/data/media/movies`, `tv` and `anime`, the TRaSH layout. Change them to match your folders, and remove Anime if you don't keep one.
 3. Start it, open the web UI (port 9892), and create your login with the setup code from the container's log.
-4. Check **Settings > Libraries** and **Settings > General** (languages), then press **Scan now** on the Dashboard.
+4. Add the **Folder mappings** for Radarr and Sonarr (see below), check **Settings > Libraries** and **Settings > General** (languages), then press **Scan now** on the Dashboard. It starts in Report only, so nothing changes yet.
+5. Before turning Report only off, set how long originals are kept and a **size limit for the recycle folder** (Settings > General). The first pass through a big library can fill terabytes of recycle folder in a couple of days.
+
+**Why `/mnt/user0`:** with a cache pool, files written through `/mnt/user` land on the cache SSD. Dubarr writes each cleaned copy as a new file, so every cleaned film would end up on the cache and the mover would have to copy it back to the array. `/mnt/user0` is the same folders on the array disks only, so cleaned copies go straight to the original's array disk. Radarr and Sonarr keep using `/mnt/user`. If your media share has no cache pool, `/mnt/user` works the same. Newly imported files still on the cache are picked up once the mover has run.
 
 ## Install with Docker
 
@@ -72,6 +77,7 @@ docker run -d --name dubarr \
   -v /path/to/appdata/dubarr:/config \
   -v /path/to/movies:/movies \
   -v /path/to/tv:/tv \
+  -v /path/to/anime:/anime \
   ghcr.io/p1zzm1ssile/dubarr:latest
 ```
 
@@ -87,11 +93,12 @@ All optional, under Settings:
 
 - **Rescans:** add the address and API key, and Dubarr asks them to rescan each file it changes.
 - **Check new imports straight away:** in Radarr or Sonarr, Settings > Connect > + > Webhook, tick *On Import* and *On Upgrade*, method POST, and paste the address shown on Dubarr's Radarr or Sonarr settings tab. Without it, new files are picked up at the next scheduled scan.
-- **Different folders:** if Radarr sees `/data/media/movies` where Dubarr sees `/movies`, set the folder mapping to `/data/media/movies=/movies`.
+- **Different folders:** if Radarr sees `/data/media/movies` where Dubarr sees `/movies`, set the folder mapping to `/data/media/movies=/movies`. With the TRaSH layout, Sonarr usually has two root folders, so it needs both: `/data/media/tv=/tv, /data/media/anime=/anime`. A missing mapping pops up after a scan with the one Dubarr suggests.
 
 ## Good to know
 
 - **Where originals go:** a hidden `.dubarr-recycle` folder at the top of each library, so moving them is instant on the same disk. You can set your own folder instead; on another disk, moving is a full copy.
+- **How much the recycle folder keeps:** originals are kept for the days you set (7 by default), and with a size limit (Settings > General, *Most space originals may take*) the oldest go first once it's reached. History shows how much is in it, and *Empty recycle folder now* empties every original or those older than a few days straight away, even while a scan or batch is running. Every run is logged.
 - **Restored files are left alone.** After a restore, Dubarr won't strip that file again until you press *Stop leaving alone* on the Dashboard.
 - **Array writes:** rewriting a big remux on a parity array takes a while. Set the hours Dubarr may change files (e.g. 1 to 7 overnight) and how many files it changes at a time.
 - **CPU and disk:** Dubarr runs ffmpeg and mkvmerge at low priority by default, so a Jellyfin transcode always comes first. With films spread over several disks, raise **Workers** to change more at once; Dubarr never puts two workers on the same disk.

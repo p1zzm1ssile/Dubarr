@@ -162,10 +162,26 @@ def restore(store: Store, history_id: int) -> str:
 
 def purge(store: Store, keep_days: int, now: float = None) -> int:
     """Delete originals that have been in the recycle folder longer than keep_days."""
+    return empty_recycle(store, keep_days, now=now)["count"]
+
+
+def in_recycle(store: Store) -> dict:
+    """How many originals are in the recycle folders, and how much space they take."""
+    entries = store.history_in_state(RESTORABLE)
+    return {"count": len(entries), "bytes": sum(e["original_size"] or 0 for e in entries),
+            "oldest": min((e["changed_at"] for e in entries), default=None)}
+
+
+def empty_recycle(store: Store, keep_days: int, max_bytes: int = 0, now: float = None) -> dict:
+    """Delete originals older than keep_days (0: every one), then, while what's left takes more than max_bytes
+    (0: no limit), the oldest of the rest. Returns what was emptied and what's left."""
     now = now or time.time()
-    count = 0
-    for entry in store.history_in_state(RESTORABLE):
-        if keep_days > 0 and entry["changed_at"] > now - keep_days * 86400:
+    entries = store.history_in_state(RESTORABLE)  # oldest first
+    left = sum(e["original_size"] or 0 for e in entries)
+    count = freed = 0
+    for entry in entries:
+        too_old = keep_days <= 0 or entry["changed_at"] <= now - keep_days * 86400
+        if not too_old and not (max_bytes and left > max_bytes):
             continue
         backup = entry["backup_path"]
         try:
@@ -173,10 +189,12 @@ def purge(store: Store, keep_days: int, now: float = None) -> int:
                 os.remove(backup)
                 _remove_empty(os.path.dirname(backup))
             store.update_history(entry["id"], state="purged", backup_path=None)
-            count += 1
         except OSError:
-            pass
-    return count
+            continue
+        count += 1
+        freed += entry["original_size"] or 0
+        left -= entry["original_size"] or 0
+    return {"count": count, "freed": freed, "left": len(entries) - count, "left_bytes": left}
 
 
 def _remove_empty(folder):

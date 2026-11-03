@@ -160,6 +160,7 @@ class Engine:
         self.last_scan = 0.0
         self.last_apply = 0.0
         self.last_purge = 0.0
+        self._recycle = threading.Lock()  # emptying the recycle folder runs beside jobs; restores wait for it
         self.last_subtitles = 0.0
         self.last_detect = 0.0
         self.last_replace = 0.0
@@ -655,7 +656,7 @@ class Engine:
                 what = ("subtitle files beside them" if only == "files" else "tracks inside them")
                 logger.info(f"{totals['nothing']} file(s) had no {what} to remove, so they were left. "
                             "Choose another option next to Apply for the rest of their changes")
-            self.purge()
+            self.purge(why="after the batch", wait=False)
 
     def to_apply(self, paths=None, library=None, only=None):
         """How many files waiting to be changed have something to do for only ("files" or "tracks")."""
@@ -1116,7 +1117,8 @@ class Engine:
 
     def _restore_one(self, history_id):
         entry = self.store.history_entry(history_id)
-        restored = swap.restore(self.store, history_id)
+        with self._recycle:  # not while the recycle folder is being emptied, which could take this original
+            restored = swap.restore(self.store, history_id)
         # Leave the video alone from now on, or the next pass would strip it (or its subtitle file) again
         path = entry.get("video") or restored
         self.store.set_ignored(path, True)
@@ -1401,11 +1403,41 @@ class Engine:
             stopped = " before Stop was pressed" if self._stop.is_set() else ""
             logger.log("ACTION", f"Accept all: tagged {tagged} file(s) from suggestions at least {minimum}% sure{stopped}")
 
-    def purge(self):
-        count = swap.purge(self.store, config.recycle_days)
-        self.last_purge = time.time()
-        if count:
-            logger.info(f"Emptied {count} original(s) older than {config.recycle_days} days from the recycle folder")
+    def purge(self, keep_days=None, why="daily", wait=True):
+        """Empty the recycle folder: originals older than keep_days (the setting when None, 0 for every one), then
+        the oldest while they take more than the size limit. Runs beside any scan or batch of changes, so it's
+        never held up for hours, and is always logged. Returns the result, or None if it was already running."""
+        manual = keep_days is not None
+        keep_days = config.recycle_days if keep_days is None else keep_days
+        limit = config.recycle_max_gb * 1024 ** 3 if not manual else 0
+        if not self._recycle.acquire(blocking=wait):
+            return None
+        try:
+            result = swap.empty_recycle(self.store, keep_days, limit)
+        finally:
+            self._recycle.release()
+        if not manual:
+            self.last_purge = time.time()
+        if keep_days <= 0:
+            rule = "every original"
+        else:
+            rule = f"originals older than {keep_days} day{'s' if keep_days != 1 else ''}"
+        if limit:
+            rule += f", then the oldest while they take more than {config.recycle_max_gb} GB"
+        left = f"{result['left']} original(s), {size(result['left_bytes'])}, still in the recycle folder"
+        if result["count"]:
+            logger.log("ACTION", f"Recycle folder ({why}): emptied {result['count']} original(s), freeing "
+                       f"{size(result['freed'])} ({rule}). {left}")
+        elif why not in ("size limit", "after the batch"):
+            logger.info(f"Recycle folder ({why}): nothing to empty ({rule}). {left}")
+        return result
+
+    def recycle_summary(self):
+        return swap.in_recycle(self.store)
+
+    def purge_soon(self, keep_days=None, why="settings changed"):
+        """Empty the recycle folder in its own thread, straight away."""
+        threading.Thread(target=self.purge, args=(keep_days, why), daemon=True).start()
 
     def recover(self):
         for message in swap.recover(self.store):
@@ -1568,6 +1600,16 @@ class Engine:
         now = time.time()
         if now - self.last_detect >= DETECT_EVERY_SECONDS and not self._detecting.locked():
             threading.Thread(target=self.detect_pass, daemon=True).start()
+        # The recycle folder is emptied before anything else and beside any job, so a long scan or batch can't
+        # hold it up while the batch keeps filling it
+        try:
+            if now - self.last_purge >= 24 * 3600:
+                self.purge(why="daily" if self.last_purge else "on start", wait=False)
+            elif config.recycle_max_gb and not self._recycle.locked():
+                if swap.in_recycle(self.store)["bytes"] > config.recycle_max_gb * 1024 ** 3:
+                    self.purge(why="size limit", wait=False)
+        except Exception as e:
+            logger.error(f"Couldn't empty the recycle folder: {e}")
         if self.busy():
             return
         try:
@@ -1581,8 +1623,5 @@ class Engine:
             if (config.replace_no_audio and not config.report_only
                     and now - self.last_replace >= APPLY_EVERY_SECONDS):
                 self.replace_no_audio("scheduled")
-            if now - self.last_purge >= 24 * 3600:
-                with self.job("Emptying the recycle folder"):
-                    self.purge()
         except Busy:
             pass

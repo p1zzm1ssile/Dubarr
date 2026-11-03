@@ -833,6 +833,12 @@ async function showHistory() {
   const restoreBatch = el("button", { type: "button", text: "Restore the last batch" });
   const result = el("span", { class: "result", role: "status" });
   const intro = el("p", { class: "muted small" });
+  const binInfo = el("span", { class: "small muted" });
+  const binAge = el("select", { class: "library-select", "aria-label": "Which originals to empty" },
+    el("option", { value: "0", text: "Every original" }),
+    [1, 2, 3, 7, 14].map((d) => el("option", { value: String(d), text: `Older than ${d} day${d > 1 ? "s" : ""}` })));
+  const emptyBin = el("button", { type: "button", text: "Empty recycle folder now" });
+  const bin = el("div", { class: "toolbar" }, binInfo, binAge, emptyBin);
   const table = el("table");
   const more = el("div");
   let entries = [];
@@ -840,7 +846,7 @@ async function showHistory() {
   let run = null;
 
   view.replaceChildren(
-    el("h1", { text: "History" }), intro,
+    el("h1", { text: "History" }), intro, bin,
     el("div", { class: "toolbar" }, el("div", { style: "flex:1;min-width:200px" }, search), restoreBatch, result),
     el("div", { class: "panel", style: "padding:0;overflow-x:auto" }, table), more);
 
@@ -892,11 +898,33 @@ async function showHistory() {
     intro.textContent = r.recycle_days
       ? `Every file Dubarr changed. Originals stay in the recycle folder for ${r.recycle_days} days, so you can restore them until then. A restored file is left alone from then on.`
       : "Every file Dubarr changed. The recycle folder is set to 0 days, so originals are deleted as soon as the new file checks out and can't be restored.";
+    const waiting = r.recycle || { count: 0, bytes: 0 };
+    binInfo.textContent = waiting.count
+      ? `Recycle folder: ${waiting.count} original${waiting.count > 1 ? "s" : ""}, ${bytes(waiting.bytes)}`
+        + (r.recycle_max_gb ? ` (limit ${r.recycle_max_gb} GB)` : "")
+      : "Recycle folder: empty";
+    binAge.hidden = emptyBin.hidden = !waiting.count;
     const d = await api("/api/dashboard");
     run = d.restorable_run;
     restoreBatch.hidden = !run;
     render();
   }
+
+  emptyBin.addEventListener("click", async () => {
+    const days = Number(binAge.value);
+    const what = days ? `originals older than ${days} day${days > 1 ? "s" : ""}` : "every original";
+    if (!confirm(`Delete ${what} from the recycle folder now? They can't be restored after this.`)) return;
+    emptyBin.disabled = true;
+    try {
+      const r = await post("/api/empty-recycle", { older_than_days: days });
+      flash(result, true, r.message);
+      setTimeout(() => load(false), 3000);
+    } catch (e) {
+      flash(result, false, e.message);
+    } finally {
+      emptyBin.disabled = false;
+    }
+  });
 
   restoreBatch.addEventListener("click", async () => {
     if (!confirm("Put back the originals of every file changed in the last batch?")) return;
