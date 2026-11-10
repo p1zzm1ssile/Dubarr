@@ -336,6 +336,9 @@ ul.files li.unwanted .fname { color: var(--muted); text-decoration: line-through
 .stats { display: flex; flex-wrap: wrap; gap: 1.5rem; }
 .stats .stat .num { font-size: 1.6rem; font-weight: 700; display: block; }
 .stats .stat .label { color: var(--muted); font-size: 0.85rem; }
+a.stat { color: inherit; text-decoration: none; }
+a.stat:hover .label { text-decoration: underline; }
+.stats .stat.warn .num { color: var(--warn); }
 
 .progress { height: 6px; border-radius: 999px; background: var(--panel-2); overflow: hidden; margin: 0.5rem 0; }
 .progress > span { display: block; height: 100%; background: var(--accent); transition: width 0.3s; }

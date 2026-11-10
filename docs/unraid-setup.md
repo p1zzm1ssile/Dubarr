@@ -35,6 +35,7 @@ Good to know:
 - **Only the host path changes.** Keep the container paths (`/movies`, `/tv`, `/anime`) as they are. Radarr and Sonarr keep using `/mnt/user/data`; nothing changes for them.
 - **New downloads wait for the mover.** A file that's still on the cache isn't visible under `/mnt/user0` yet. Dubarr checks it at the first scan after the mover has run. That's no loss: changing it on the cache would only give the mover more to do.
 - **No cache pool on the media share?** Then `/mnt/user` and `/mnt/user0` are the same, and either works.
+- **Dubarr tells you if it's wrong.** When a cleaned copy ends up on a pool although its original was on an array disk, Dubarr shows a warning (and sends it as a notification, if those are set up). It reads where each file is from Unraid itself, so this only works on Unraid user shares.
 - **Never map a pool directly** (`/mnt/cache/...` or `/mnt/<pool>/...`), or Dubarr only sees the films that happen to be on it.
 
 ## 3. Folder mappings for Radarr and Sonarr

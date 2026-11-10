@@ -193,6 +193,12 @@ class Store:
     def runs(self, limit=20):
         return self._all("SELECT * FROM runs WHERE changed > 0 OR failed > 0 ORDER BY id DESC LIMIT ?", (limit,))
 
+    def runs_since(self, since):
+        """Changed, failed and saved, added up over the runs finished since then."""
+        row = self._one("SELECT COALESCE(SUM(changed), 0) AS changed, COALESCE(SUM(failed), 0) AS failed, "
+                        "COALESCE(SUM(saved_bytes), 0) AS saved_bytes FROM runs WHERE finished >= ?", (since,))
+        return dict(row)
+
     def last_run_with_restorable(self):
         row = self._one("SELECT run_id FROM history WHERE state = ? AND run_id IS NOT NULL ORDER BY id DESC LIMIT 1",
                         (RESTORABLE,))

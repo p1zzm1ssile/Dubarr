@@ -17,6 +17,7 @@ from core.plan import NOT_FROM_BAZARR, Plan, Rules, _removal, decide, mergeable
 from core.probe import PROBE_VERSION, MediaInfo, ProbeError, find_sidecars, probe, sidecar_name
 from core.remux import RemuxError, remux, supported, temp_path
 from core.store import Store
+from services import push as pushes
 from services.connections import Arr, Bazarr, Jellyfin, ServiceError
 from utils.languages import LANGUAGES, name, normalise
 from utils.logger import logger
@@ -33,6 +34,7 @@ APPLY_EVERY_SECONDS = 600
 DETECT_EVERY_SECONDS = 600
 DETECT_PAUSE_SECONDS = 5     # between files in background detection, so Whisper and the disks get a rest
 NOTIFY_QUIET_SECONDS = 60    # the other apps are told once changes have stopped for this long
+PUSH_REPEAT_SECONDS = 24 * 3600  # the same problem is only sent to your phone once a day
 NOTIFY_MOST_SECONDS = 300    # or after this, while changes keep coming
 
 
@@ -175,6 +177,10 @@ class Engine:
         self._unreachable = {}  # Radarr, Sonarr or Jellyfin: when to try asking them again
         self._alerts = []       # problems with the other apps, newest last, shown as pop-ups in the web UI
         self._alert_id = 0
+        self._pushed = {}       # {problem sent to your phone: when}, so it isn't sent again for a day
+        self._new_no_audio = []  # files found with no audio since the last notification about them
+        self.last_summary = ""  # the day the daily summary was last sent
+        self.push_in_background = True
 
     # Jobs
 
@@ -476,6 +482,10 @@ class Engine:
         except OSError as e:
             logger.warning(f"Can't read {path}: {e.strerror or e}")
             return None
+        if status == plans.NO_AUDIO:
+            before = self.store.file(path)
+            if (not before or before["status"] != plans.NO_AUDIO) and path not in self._new_no_audio:
+                self._new_no_audio.append(path)
         self.store.save_file(path, library["path"], st.st_size, st.st_mtime, st.st_nlink,
                              info.to_dict() if info else None, status, message,
                              plan.to_dict() if plan else None, plan.saved_bytes if plan else 0)
@@ -495,6 +505,81 @@ class Engine:
             return
         self._alert_id += 1
         self._alerts = (self._alerts + [{"id": self._alert_id, "at": now, "service": service, "message": message}])[-20:]
+        self.push("problems", f"Dubarr: {service}" if service != "Dubarr" else "Dubarr", message)
+
+    def push(self, what, title, message):
+        """Send a notification to your phone, if that's set up and this kind is turned on, in its own thread so
+        a slow server never holds up a job. what is problems, no_audio or daily. Returns False if not sent."""
+        if not config.push_url or not getattr(config, f"push_{what}", False):
+            return False
+        now = time.time()
+        if what == "problems":
+            self._pushed = {m: at for m, at in self._pushed.items() if now - at < PUSH_REPEAT_SECONDS}
+            if message in self._pushed:
+                return False
+            self._pushed[message] = now
+        url, timeout = config.push_url, config.request_timeout
+
+        def send():
+            try:
+                pushes.send(url, title, message, timeout=timeout)
+            except pushes.PushError as e:
+                logger.warning(f"Couldn't send a notification: {e}")
+
+        if self.push_in_background:
+            threading.Thread(target=send, daemon=True).start()
+        else:
+            send()
+        return True
+
+    def push_no_audio(self):
+        """One notification for the files with no audio a scan or import found."""
+        found, self._new_no_audio = self._new_no_audio, []
+        if not found:
+            return
+        names = ", ".join(os.path.basename(p) for p in found[:5]) + (f" and {len(found) - 5} more" if len(found) > 5 else "")
+        self.push("no_audio", f"Dubarr: {len(found)} file{'s' if len(found) > 1 else ''} with no audio",
+                  f"{names}. Usually a bad download: Replace them under No audio on the Dashboard.")
+
+    def daily_summary(self, now=None):
+        """Once a day, at the hour set: what changed in the last day and how full the recycle folder is.
+        Skipped when nothing changed or failed."""
+        now = now or time.time()
+        local = datetime.datetime.fromtimestamp(now)
+        today = local.strftime("%Y-%m-%d")
+        if not config.push_url or not config.push_daily or self.last_summary == today:
+            return False
+        if local.hour != config.push_daily_hour:
+            return False
+        self.last_summary = today
+        runs = self.store.runs_since(now - 24 * 3600)
+        if not runs["changed"] and not runs["failed"]:
+            return False
+        lines = [f"Changed {runs['changed']} file(s), saving {size(runs['saved_bytes'])}."]
+        if runs["failed"]:
+            lines.append(f"{runs['failed']} couldn't be changed: see the Dashboard and Logs.")
+        recycle = swap.in_recycle(self.store)
+        if recycle["count"]:
+            limit = f" of the {config.recycle_max_gb} GB limit" if config.recycle_max_gb else ""
+            lines.append(f"Recycle folder: {recycle['count']} original(s), {size(recycle['bytes'])}{limit}.")
+        waiting = self.store.counts().get(plans.NO_AUDIO, {}).get("files", 0)
+        if waiting:
+            lines.append(f"{waiting} file(s) with no audio are waiting to be replaced.")
+        return self.push("daily", "Dubarr: the last day", " ".join(lines))
+
+    def check_disk(self, path, before):
+        """On Unraid, a cleaned copy written through /mnt/user lands on the cache pool even though its original
+        was on the array, and the mover then has to copy it back. Say so, as it's easy to fix in the template."""
+        if not swap.on_array(before):
+            return
+        after = swap.unraid_disk(path)
+        if after and not swap.on_array(after):
+            message = (f"Cleaned files are landing on the Unraid pool \"{after}\" instead of the array (e.g. "
+                       f"{os.path.basename(path)}, which was on {before}), so the mover has to copy each one back. "
+                       "Map your libraries through /mnt/user0 instead of /mnt/user in the container's template: "
+                       "see the Unraid setup guide")
+            logger.warning(message)
+            self.alert("Dubarr", message)
 
     def alerts(self, since=0):
         return [a for a in self._alerts if a["id"] > since]
@@ -568,6 +653,7 @@ class Engine:
             found = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in sorted(counts.items(), key=str) if k)
             logger.info(f"Scan ({trigger}) checked {sum(counts.values())} file(s) in {time.time() - started:.0f}s"
                         + (f": {found}" if found else ""))
+            self.push_no_audio()
 
     def imported(self, paths, wait=True):
         """Radarr or Sonarr just imported these. Check them now, and change them if allowed."""
@@ -652,6 +738,10 @@ class Engine:
             if changed or failed:
                 logger.log("ACTION", f"Changed {changed} file(s), saving {size(saved)}"
                            + (f". {failed} couldn't be changed, see the Dashboard" if failed else ""))
+            if failed:
+                self.push("problems", "Dubarr: files couldn't be changed",
+                          f"{failed} file(s) couldn't be changed in the last batch ({changed} were). The originals "
+                          "are untouched. The reasons are on the Dashboard and in Logs.")
             if totals["nothing"] and only:
                 what = ("subtitle files beside them" if only == "files" else "tracks inside them")
                 logger.info(f"{totals['nothing']} file(s) had no {what} to remove, so they were left. "
@@ -742,10 +832,12 @@ class Engine:
         saved = 0
         try:
             if plan.rewrites:
+                disk = swap.unraid_disk(path)
                 new = self._remux(info, plan)
                 history_id = swap.swap(self.store, run_id, path, info.size, new.size, plan.message, plan.remove,
                                        root, config.recycle_days)
                 saved += info.size - new.size
+                self.check_disk(path, disk)
                 took = max(1.0, time.time() - started)
                 logger.log("ACTION", f"{plan.message} from {path} (saved {size(info.size - new.size)}, change #{history_id}, "
                            f"took {took / 60:.1f} min at {info.size / took / 1024 / 1024:.0f} MB/s)")
@@ -1428,6 +1520,11 @@ class Engine:
         if result["count"]:
             logger.log("ACTION", f"Recycle folder ({why}): emptied {result['count']} original(s), freeing "
                        f"{size(result['freed'])} ({rule}). {left}")
+            if why == "size limit":
+                self.push("problems", "Dubarr: recycle folder full",
+                          f"The recycle folder reached its {config.recycle_max_gb} GB limit, so the oldest "
+                          f"{result['count']} original(s) were emptied before their {keep_days} days were up and "
+                          "can't be restored.")
         elif why not in ("size limit", "after the batch"):
             logger.info(f"Recycle folder ({why}): nothing to empty ({rule}). {left}")
         return result
@@ -1610,6 +1707,10 @@ class Engine:
                     self.purge(why="size limit", wait=False)
         except Exception as e:
             logger.error(f"Couldn't empty the recycle folder: {e}")
+        try:
+            self.daily_summary(now)
+        except Exception as e:
+            logger.error(f"Couldn't send the daily summary: {e}")
         if self.busy():
             return
         try:

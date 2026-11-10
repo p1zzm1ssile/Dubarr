@@ -33,6 +33,24 @@ def recycle_root(library: str, recycle_folder: str = "") -> str:
     return recycle_folder or os.path.join(library, RECYCLE_NAME)
 
 
+def unraid_disk(path: str):
+    """On an Unraid user share, the disk or pool a file is stored on ("disk3", "cache"), read from the location
+    Unraid gives each file. None anywhere else, or when it can't be read."""
+    for attribute in ("system.LOCATION", "system.LOCATIONS", "user.LOCATION"):
+        try:
+            value = os.getxattr(path, attribute)
+        except (OSError, AttributeError):
+            continue
+        value = value.decode(errors="replace").strip("\x00 \n")
+        if value:
+            return value.split(",")[0].strip()
+    return None
+
+
+def on_array(disk) -> bool:
+    return bool(disk) and disk.startswith("disk") and disk[4:].isdigit()
+
+
 def _copy_ownership(source_stat, target):
     """The new file gets the original's permissions and owner, so Radarr, Sonarr and Jellyfin can still use it."""
     try:
