@@ -77,6 +77,7 @@ TABS = {
     "bazarr": "Bazarr",
     "jellyfin": "Jellyfin",
     "detection": "Language detection",
+    "notifications": "Notifications",
 }
 
 
@@ -336,6 +337,26 @@ FIELDS = [
            "press Looks right. Files whose guesses are all at least this sure skip that and go straight to Will be "
            "changed. 100 means always wait for Looks right. Changing this checks the waiting files again. Files with "
            "nothing to remove go to their usual list, such as Already clean."),
+
+    # Notifications to your phone
+    F("push_url", "notifications", "Send notifications to", "secret", env_str("PUSH_URL"), section="Where to",
+      help="An ntfy topic (https://ntfy.sh/your-topic, or your own ntfy server), a Gotify address with its app "
+           "token (https://gotify.example/message?token=...) or a Discord webhook. Kept secret like an API key, "
+           "since anyone with it can send you notifications. Leave empty for none."),
+    F("push_problems", "notifications", "When something goes wrong", "bool",
+      env_bool("PUSH_PROBLEMS", default=True), section="What to send",
+      help="Files that couldn't be changed, Radarr, Sonarr, Bazarr or Jellyfin not answering, cleaned files "
+           "landing on an Unraid cache pool, and the recycle folder size limit emptying originals early. "
+           "The same message isn't sent again within a day."),
+    F("push_no_audio", "notifications", "When files with no audio turn up", "bool",
+      env_bool("PUSH_NO_AUDIO", default=True), section="What to send",
+      help="Usually a bad download. Sent once after each scan or import that finds new ones."),
+    F("push_daily", "notifications", "Daily summary", "bool",
+      env_bool("PUSH_DAILY", default=True), section="What to send",
+      help="What changed in the last day, the space saved, and how full the recycle folder is. "
+           "Skipped on days when nothing happened."),
+    F("push_daily_hour", "notifications", "Send the summary at (hour)", "int",
+      env_int("PUSH_DAILY_HOUR", default=9), section="What to send", min=0, max=23),
 ]
 
 def with_scheme(url):

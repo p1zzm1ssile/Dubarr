@@ -24,6 +24,7 @@ from core import detect as detection
 from core.probe import find_sidecars
 from core.swap import SwapError
 from core.tagging import TEXT_SUBTITLES, TagError, audio_sample, subtitle_lines, subtitle_stills
+from services import push
 from services.connections import Arr, Bazarr, Jellyfin, ServiceError, webhook_paths
 from utils.languages import LANGUAGES, name, normalise
 from utils.logger import logger
@@ -548,6 +549,7 @@ def dashboard():
         "libraries": [{"path": lib["path"], "exists": os.path.isdir(lib["path"]),
                        "audio": lib["audio"], "subtitles": lib["subtitles"]} for lib in config.library_list],
         "restorable_run": engine.store.last_run_with_restorable(),
+        "recycle": {**engine.recycle_summary(), "days": config.recycle_days, "max_gb": config.recycle_max_gb},
         "report_only": config.report_only,
         "bazarr_clashes": bazarr_clashes(),
     }
@@ -677,6 +679,12 @@ def test_connection(target, values):
             return {"ok": True, "message": detection.test_whisper(cfg)}
         if target == "ollama":
             return {"ok": True, "message": detection.test_ollama(cfg)}
+        if target == "push":
+            if not cfg.push_url:
+                return {"ok": False, "message": "Enter the address first"}
+            how = push.send(cfg.push_url, "Dubarr", "Test notification: Dubarr can reach you.",
+                            timeout=cfg.request_timeout)
+            return {"ok": True, "message": f"Sent a test notification ({'ntfy' if how == 'ntfy' else how.capitalize()})"}
         if target not in ("radarr", "sonarr", "bazarr", "jellyfin"):
             return {"ok": False, "message": "Unknown service"}
         if not getattr(cfg, f"{target}_api_key"):
@@ -702,7 +710,7 @@ def test_connection(target, values):
         version = arr.version()
         what = "movies" if target == "radarr" else "series"
         return {"ok": True, "message": f"Connected to {arr.name} {version} ({len(arr.items())} {what})"}
-    except (ServiceError, detection.DetectError, ValueError) as e:
+    except (ServiceError, detection.DetectError, push.PushError, ValueError) as e:
         return {"ok": False, "message": str(e)}
 
 

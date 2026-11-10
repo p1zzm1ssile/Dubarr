@@ -760,7 +760,8 @@ async function showDashboard(selected) {
       el("div", { class: "stat" }, el("span", { class: "num", text: bytes(d.saved.saved_bytes) }),
         el("span", { class: "label", text: `saved so far, from ${d.saved.files} file(s)` })),
       el("div", { class: "stat" }, el("span", { class: "num", text: bytes(pending.saved_bytes) }),
-        el("span", { class: "label", text: `to save from ${pending.files} file(s) waiting` })));
+        el("span", { class: "label", text: `to save from ${pending.files} file(s) waiting` })),
+      recycleStat(d.recycle));
 
     tiles.replaceChildren(...d.statuses.filter((s) => s.files || ["change", "no_wanted_audio", "clean"].includes(s.key)).map((s) =>
       el("button", { type: "button", class: `tile ${STATUS_STYLE[s.key] || ""}${s.key === status ? " active" : ""}`,
@@ -1102,10 +1103,24 @@ function webhookPanel(tab) {
     el("p", { class: "help", text: "The address contains a secret. Keep it private, like an API key." }));
 }
 
+// How much the recycle folder holds, against its size limit when one is set. Links to History, where it's emptied
+function recycleStat(r) {
+  r = r || { count: 0, bytes: 0, days: 0, max_gb: 0 };
+  const full = r.max_gb ? r.bytes / (r.max_gb * 1024 ** 3) : 0;
+  const label = r.count
+    ? `in the recycle folder, ${r.count} original${r.count > 1 ? "s" : ""}`
+      + (r.max_gb ? ` (${Math.min(100, Math.round(full * 100))}% of the ${r.max_gb} GB limit)` : `, kept ${r.days} days`)
+    : "in the recycle folder";
+  return el("a", { class: `stat${full >= 0.9 ? " warn" : ""}`, href: "#/history",
+    title: "Originals of changed files, kept so they can be restored. Empty it or set a size limit on the History page and in Settings > General" },
+    el("span", { class: "num", text: bytes(r.bytes) }), el("span", { class: "label", text: label }));
+}
+
 // The section on each tab that gets a Test connection button, and what it tests
 const TESTABLE = {
   radarr: { Connection: "radarr" }, sonarr: { Connection: "sonarr" }, bazarr: { Connection: "bazarr" },
   jellyfin: { Connection: "jellyfin" }, detection: { "Audio: Whisper": "whisper", Subtitles: "ollama" },
+  notifications: { "Where to": "push" },
 };
 
 const TAB_INTRO = {
@@ -1114,6 +1129,7 @@ const TAB_INTRO = {
   sonarr: "Optional. After changing an episode, Dubarr asks Sonarr to rescan the series, so Sonarr shows the new tracks and size.",
   bazarr: "Optional. After changing a film, Dubarr asks Bazarr to look at it again straight away, and to search for subtitles if the change left none in your languages. Test connection also checks Bazarr's language profiles: a language Bazarr downloads but Dubarr removes would keep coming back.",
   jellyfin: "Optional. After changing a file, Dubarr tells Jellyfin, so the audio and subtitle menus update without a full library scan.",
+  notifications: "Optional. Sends a notification to your phone when something needs you, so you don't have to keep the web UI open. Install the ntfy app and subscribe to a topic only you know, or use Gotify or a Discord webhook. Test connection sends a test notification.",
   detection: "Optional. Adds a Detect button to tracks under Listen & tag, which suggests their language. A suggestion is never saved until you choose it and press Save tags. For Whisper, run the whisper-asr-webservice container (onerahmet/openai-whisper-asr-webservice) with ASR_MODEL=small on a CPU, base on a low-power box, or medium or large-v3 with a GPU. Never a .en model: those only know English, so they can't tell languages apart. Ollama's Test connection checks the model is pulled.",
 };
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.8
+
+- **Notifications.** New Settings > Notifications tab: paste an ntfy topic address, a Gotify address with its app token, or a Discord webhook, and press Test connection. Dubarr then lets you know when files couldn't be changed, when Radarr, Sonarr, Bazarr or Jellyfin stop answering (anything that shows as a pop-up), when a scan or import finds new files with no audio, and when the recycle folder size limit empties originals before their days are up. A daily summary (on by default, at 9, skipped on days nothing happened) says what changed, the space saved and how full the recycle folder is. Each kind can be turned off, and the same problem is only sent once a day. The address is kept secret like an API key.
+- **Recycle folder on the Dashboard.** Beside "saved so far" the Dashboard now shows how much the recycle folder holds, with how full it is against the size limit when one is set (turning orange from 90%). Click it to go to History, where it can be emptied.
+- **Warning when cleaned files land on the Unraid cache.** If a cleaned copy ends up on a pool while its original was on an array disk, which happens when the libraries are mapped through `/mnt/user` instead of `/mnt/user0`, Dubarr says so once, as a pop-up, in the log and as a notification. It reads each file's disk from Unraid, so it stays quiet anywhere else.
+
 ## 0.9.7
 
 - **Empty the recycle folder now.** History shows how many originals are in the recycle folder and how much space they take, with *Empty recycle folder now*: every original, or only those older than 1, 2, 3, 7 or 14 days. It starts straight away, even while a scan or a batch of changes is running.

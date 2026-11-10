@@ -47,6 +47,8 @@ Never use Whisper's `.en` models, which only know English. Avoid 1B Ollama model
 
 **Removing a track by hand:** press *Check tracks* on the Dashboard, tick *Remove* on any audio or subtitle track, or subtitle file, and press *Remove ticked*. With Bazarr connected, each subtitle file says whether Bazarr downloaded it, and from where (OpenSubtitles.com, say).
 
+**Notifications:** Settings > Notifications sends a notification to your phone through [ntfy](https://ntfy.sh), Gotify or a Discord webhook when files couldn't be changed, Radarr or Sonarr stop answering, files with no audio turn up, or the recycle folder's size limit empties originals early, plus a daily summary of what changed. Each can be turned off, and the same problem is only sent once a day.
+
 **One library at a time:** with more than one library, pick one next to *Apply all* on the Dashboard to list and apply just its files.
 
 Languages are set once for everything, and can be overridden per library, e.g. Japanese + English audio for an anime folder.
